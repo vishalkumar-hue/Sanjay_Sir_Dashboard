@@ -78,11 +78,6 @@ def clean_numeric(series: pd.Series) -> pd.Series:
 # ----------------------------------------------------------------------
 # COLUMN RESOLUTION
 # ----------------------------------------------------------------------
-# The "Compile Report" tab is a straight, single-occurrence-per-column
-# sheet (Financial Year / Quarter / Month / Sheet Name / Project Code /
-# Budget / Expence Type / Subtotal After Deduction), so plain name
-# matching (fuzzy on case/whitespace/punctuation) is enough here - no
-# duplicate-header letter overrides needed like the margin dashboard.
 def find_col(df: pd.DataFrame, target: str):
     def normalize(s: str) -> str:
         return "".join(ch for ch in s.strip().lower() if ch.isalnum())
@@ -121,11 +116,6 @@ def resolve_columns(df: pd.DataFrame):
 # ----------------------------------------------------------------------
 # JUNK-ROW FILTER
 # ----------------------------------------------------------------------
-# The sheet is several payment-sheets pasted one after another, and each
-# new block occasionally leaves a stray leftover header row stuck inside
-# the data (e.g. Project Code column literally containing the text
-# "Project Code", Expense Type column containing "Nature Of Expense").
-# These aren't real entries and must be dropped before anything else.
 JUNK_MARKERS = {"project code", "nature of expense", "expence type", "expense type", "sheet name"}
 
 
@@ -138,11 +128,6 @@ def is_junk_row(project_code: str, expense_type: str) -> bool:
 # ----------------------------------------------------------------------
 # PROJECT CODE PARSING -> Client / Entity / Project Type
 # ----------------------------------------------------------------------
-# Project Code is typically CLIENT/EXAM-OR-CENTRE/DATE/PROJECT-TYPE/ENTITY
-# e.g. "BSEB/PATNA/010924/CENTRE-SETUP/IIPLD" -> Client=BSEB,
-# ProjectType=CENTRE-SETUP, Entity=IIPLD. Best-effort: if the code doesn't
-# have at least 3 "/"-separated parts, Client falls back to the whole code
-# and ProjectType/Entity are left blank rather than guessed.
 def parse_project_code(code: str):
     code = str(code).strip()
     if not code or code.lower() == "nan":
@@ -163,28 +148,23 @@ def prepare_data(raw: pd.DataFrame):
     budget_col = cols.get("Budget")
     subtotal_col = cols.get("Subtotal")
 
-    # Drop junk header-artifact rows
     if pc_col and et_col:
         junk_mask = df.apply(lambda r: is_junk_row(r[pc_col], r[et_col]), axis=1)
         df = df[~junk_mask]
 
-    # Drop fully blank rows (no project code at all)
     if pc_col:
         df = df[df[pc_col].astype(str).str.strip().replace({"nan": ""}) != ""]
 
-    # Clean numeric fields
     if budget_col:
         df[budget_col] = clean_numeric(df[budget_col])
     if subtotal_col:
         df[subtotal_col] = clean_numeric(df[subtotal_col])
 
-    # Trim text fields
     for logical in ["FY", "Quarter", "Month", "SheetName", "ProjectCode", "ExpenseType"]:
         c = cols.get(logical)
         if c:
             df[c] = df[c].astype(str).str.strip().replace({"nan": ""})
 
-    # Derive Client / Project Type / Entity from Project Code
     if pc_col:
         parsed = df[pc_col].apply(parse_project_code)
         df["_Client"] = parsed.apply(lambda t: t[0])
@@ -219,8 +199,6 @@ def build_rows(df: pd.DataFrame, cols: dict):
     budget = df[cols["Budget"]] if cols.get("Budget") else pd.Series([0.0] * n, index=df.index)
     subtotal = df[cols["Subtotal"]] if cols.get("Subtotal") else pd.Series([0.0] * n, index=df.index)
 
-    # Full set of ALL sheet columns, as-is, attached to every row - powers
-    # the "Columns" picker on the All Entries table.
     all_cols_df = df.drop(columns=["_Client", "_ProjectType", "_Entity"], errors="ignore")
     all_cols_df = all_cols_df.where(all_cols_df.notna(), "")
     all_columns_records = all_cols_df.to_dict("records")
@@ -256,6 +234,14 @@ if prepared_df.empty:
     st.warning("Sheet se koi valid row nahi mili. Column headers check karo.")
     st.stop()
 
+if not TEMPLATE_PATH.exists():
+    st.error(
+        f"Template file nahi mili: `{TEMPLATE_PATH}`.\n\n"
+        "GitHub repo mein `assets/dashboard_template.html` file exist karti hai ya nahi check karo, "
+        "aur ye ki `ap.py` repo ke root mein hi hai (kisi subfolder mein nahi)."
+    )
+    st.stop()
+
 rows = build_rows(prepared_df, resolved_cols)
 
 months_present = sorted(
@@ -264,9 +250,6 @@ months_present = sorted(
 )
 period_label = f"{months_present[0]} – {months_present[-1]}" if months_present else ""
 
-# Full list of every Google Sheet header (excluding our internal helper
-# columns), plus sensible defaults - both feed the column-picker dropdown
-# on the All Entries table.
 all_headers_list = [c for c in prepared_df.columns if not str(c).startswith("_")]
 
 _default_logical_order = ["FY", "Quarter", "Month", "SheetName", "ProjectCode", "ExpenseType", "Budget", "Subtotal"]
