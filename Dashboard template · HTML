@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Expense Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+<style>
+  :root{
+    --bg: #0b1220;
+    --panel: #121b2e;
+    --panel-2: #17233a;
+    --border: #223252;
+    --text: #e7ecf5;
+    --muted: #8ea0c2;
+    --gold: #d9a441;
+    --teal: #33b8a8;
+    --coral: #e0665f;
+    --violet: #8b7ee8;
+    --grid: rgba(255,255,255,0.06);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .wrap{max-width:1320px; margin:0 auto; padding:28px 24px 60px;}
+  .topbar{
+    display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom:18px; margin-bottom:22px;
+    flex-wrap:wrap; gap:10px;
+  }
+  .topbar h1{
+    font-size:22px; margin:0; letter-spacing:0.3px; font-weight:700;
+  }
+  .topbar h1 span{color:var(--gold);}
+  .topbar .sub{color:var(--muted); font-size:12.5px; margin-top:4px;}
+  .topbar-right{display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+  .kpis{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:22px;
+  }
+  .kpi{
+    background: linear-gradient(160deg, var(--panel), var(--panel-2));
+    border:1px solid var(--border); border-radius:10px; padding:16px 18px;
+  }
+  .kpi .label{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.6px;}
+  .kpi .value{font-size:22px; font-weight:700; margin-top:6px;}
+  .kpi .delta{font-size:11.5px; margin-top:4px;}
+  .up{color:var(--teal);} .down{color:var(--coral);}
+  .filters{
+    display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; align-items:flex-start;
+  }
+  .filters label{font-size:11.5px; color:var(--muted); margin-right:6px; display:block; margin-bottom:4px;}
+  select{
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:7px 10px; font-size:13px; max-width:220px;
+  }
+  .filter-bar-wrap{
+    border:1px solid var(--border); border-radius:10px; background:var(--panel);
+    padding:14px 16px 6px; margin-bottom:20px;
+  }
+  .filter-bar-head{
+    display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;
+  }
+  .filter-bar-head h4{margin:0; font-size:12.5px; color:var(--muted); text-transform:uppercase; letter-spacing:0.6px;}
+  .clear-btn{
+    background:transparent; border:1px solid var(--border); color:var(--muted);
+    border-radius:6px; padding:5px 10px; font-size:11.5px; cursor:pointer; font-family:inherit;
+  }
+  .clear-btn:hover{color:var(--coral); border-color:var(--coral);}
+
+  /* ---- Theme picker ---- */
+  .theme-picker{position:relative;}
+  .theme-btn{
+    display:flex; align-items:center; gap:7px;
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:7px 12px; font-size:12.5px; cursor:pointer; font-family:inherit;
+  }
+  .theme-btn:hover{border-color:var(--gold);}
+  .theme-btn .dot{width:10px; height:10px; border-radius:50%; background:var(--gold); box-shadow:0 0 5px var(--gold);}
+  .theme-panel{
+    display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:30;
+    background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    width:190px; padding:8px; box-shadow:0 8px 24px rgba(0,0,0,0.45);
+  }
+  .theme-panel.open{display:block;}
+  .theme-option{
+    display:flex; align-items:center; gap:9px; font-size:12.5px; padding:7px 8px;
+    border-radius:6px; cursor:pointer; color:var(--text);
+  }
+  .theme-option:hover{background:rgba(255,255,255,0.05);}
+  .theme-option.selected{background:rgba(217,164,65,0.15); color:var(--gold); font-weight:600;}
+  .theme-option .swatch{
+    width:16px; height:16px; border-radius:50%; border:1px solid rgba(255,255,255,0.15); flex:none;
+  }
+
+  /* ---- Multi-select filter dropdown ---- */
+  .multiselect{position:relative; min-width:170px; margin-bottom:10px;}
+  .ms-btn{
+    width:100%; text-align:left; background:var(--panel-2); color:var(--text);
+    border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:13px;
+    cursor:pointer; font-family:inherit; position:relative; padding-right:24px;
+  }
+  .ms-btn::after{content:'▾'; position:absolute; right:9px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:10px;}
+  .ms-btn.active{border-color:var(--gold); color:var(--gold);}
+  .ms-panel{
+    display:none; position:absolute; top:calc(100% + 4px); left:0; z-index:20;
+    background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    width:230px; max-height:280px; padding:8px; box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  }
+  .ms-panel.open{display:block;}
+  .ms-search{
+    width:100%; background:var(--bg); color:var(--text); border:1px solid var(--border);
+    border-radius:5px; padding:6px 8px; font-size:12.5px; margin-bottom:6px;
+  }
+  .ms-actions{display:flex; gap:8px; margin-bottom:6px; flex-wrap:wrap;}
+  .ms-actions button{
+    flex:1; background:transparent; border:1px solid var(--border); color:var(--muted);
+    border-radius:5px; padding:4px 6px; font-size:11px; cursor:pointer; font-family:inherit;
+    min-width:56px;
+  }
+  .ms-actions button:hover{color:var(--gold); border-color:var(--gold);}
+  .ms-list{max-height:170px; overflow-y:auto;}
+  .ms-option{
+    display:flex; align-items:center; gap:7px; font-size:12.5px; padding:4px 3px;
+    border-radius:4px; cursor:pointer;
+  }
+  .ms-option:hover{background:rgba(255,255,255,0.04);}
+  .ms-option input{margin:0; accent-color: var(--gold);}
+  .ms-option span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+  .tabbar{
+    display:flex; gap:6px; margin-bottom:22px; border-bottom:1px solid var(--border);
+    flex-wrap:wrap;
+  }
+  .tabbtn{
+    background:transparent; border:none; color:var(--muted); font-size:13.5px; font-weight:600;
+    padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-family:inherit;
+  }
+  .tabbtn:hover{color:var(--text);}
+  .tabbtn.active{color:var(--gold); border-bottom:2px solid var(--gold);}
+  .tabpage{display:none;}
+  .tabpage.active{display:block;}
+  .search-row{display:flex; gap:10px; margin-bottom:14px; align-items:flex-start; flex-wrap:wrap;}
+  .search-row input[type=text]{
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:7px 10px; font-size:13px; min-width:220px;
+  }
+  .scroll-table{max-height:560px; overflow-y:auto;}
+  .scroll-table table{position:relative;}
+  .scroll-table thead th{position:sticky; top:0; background:var(--panel); z-index:1;}
+  .grid{
+    display:grid; grid-template-columns: 1.3fr 1fr; gap:16px; margin-bottom:16px;
+  }
+  .grid3{ display:grid; grid-template-columns: 1fr 1fr 1fr; gap:16px; margin-bottom:16px;}
+  .card{
+    background: var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px;
+  }
+  .card h3{
+    margin:0 0 12px; font-size:13.5px; color:var(--text); font-weight:600;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .card h3 .tag{font-size:10.5px; color:var(--muted); font-weight:400;}
+  .chart-box{position:relative; height:280px;}
+  .chart-box.tall{height:360px;}
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th,td{padding:7px 6px; text-align:left; border-bottom:1px solid var(--grid);}
+  th{color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase;}
+  tr:hover td{background:rgba(255,255,255,0.02);}
+  .num{text-align:right; font-variant-numeric: tabular-nums;}
+  .pill{padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600;}
+  .pill.good{background:rgba(51,184,168,0.15); color:var(--teal);}
+  .pill.bad{background:rgba(224,102,95,0.15); color:var(--coral);}
+  .pill.mid{background:rgba(217,164,65,0.15); color:var(--gold);}
+  .live-dot{display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--teal); margin-right:6px; box-shadow:0 0 6px var(--teal); animation:pulse 1.6s infinite;}
+  @keyframes pulse{0%{opacity:1;}50%{opacity:0.35;}100%{opacity:1;}}
+  .cmp-controls select{
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:7px 10px; font-size:13px;
+  }
+  .cmp-controls label{font-size:11.5px; color:var(--muted); display:block; margin-bottom:4px;}
+  .cmp-controls .cmp-field{display:flex; flex-direction:column;}
+  .topn-input{
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    border-radius:5px; padding:3px 7px; font-size:11.5px; width:58px; text-align:center;
+    font-family:inherit;
+  }
+  .topn-input:focus{outline:none; border-color:var(--gold);}
+  @media (max-width: 980px){
+    .kpis{grid-template-columns:repeat(2,1fr);}
+    .grid, .grid3{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div>
+      <h1>Expense<span>.</span>Dashboard</h1>
+      <div class="sub"><span class="live-dot"></span>Compile Report · Expense &amp; Budget Overview (Live)</div>
+    </div>
+    <div class="topbar-right">
+      <div class="sub" id="periodLabel"></div>
+      <div class="theme-picker">
+        <button type="button" class="theme-btn" id="themeBtn"><span class="dot" id="themeDot"></span><span id="themeBtnLabel">Theme</span></button>
+        <div class="theme-panel" id="themePanel"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="filter-bar-wrap">
+    <div class="filter-bar-head">
+      <h4>Filters (apply across all tabs)</h4>
+      <button class="clear-btn" id="clearFiltersBtn">Clear all</button>
+    </div>
+    <div class="filters" id="filterBar"></div>
+  </div>
+
+  <div class="tabbar">
+    <button class="tabbtn active" data-tab="overview">Overview</button>
+    <button class="tabbtn" data-tab="monthly">Monthly Trend</button>
+    <button class="tabbtn" data-tab="expensetype">Expense Type</button>
+    <button class="tabbtn" data-tab="clients">Client Analysis</button>
+    <button class="tabbtn" data-tab="sheets">Sheet-wise</button>
+    <button class="tabbtn" data-tab="quartercomp">Quarter Comparison</button>
+    <button class="tabbtn" data-tab="comparison">Comparison</button>
+    <button class="tabbtn" data-tab="entries">All Entries</button>
+  </div>
+
+  <div id="tab-overview" class="tabpage active">
+
+  <div class="kpis" id="kpiRow"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Expense Trend <span class="tag">by month</span></h3>
+      <div class="chart-box tall"><canvas id="trendChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Expense Type Split <span class="tag">by amount</span></h3>
+      <div class="chart-box tall"><canvas id="expenseTypeChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Top Clients by Expense <span class="tag">
+        Top <input type="text" class="topn-input" id="topNOverview" list="topNOptionsOverview" value="10"> clients
+        <datalist id="topNOptionsOverview">
+          <option value="5"></option>
+          <option value="10"></option>
+          <option value="15"></option>
+          <option value="20"></option>
+          <option value="50"></option>
+          <option value="All"></option>
+        </datalist>
+      </span></h3>
+      <div class="chart-box"><canvas id="clientChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Source Sheet Split <span class="tag">by amount</span></h3>
+      <div class="chart-box tall"><canvas id="sheetChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Client-wise Summary <span class="tag" id="clientTableTag">clients</span></h3>
+    <div class="scroll-table">
+    <table id="clientTable">
+      <thead><tr><th>Client</th><th class="num">Entries</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Avg / Entry</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-monthly" class="tabpage">
+
+  <div class="kpis" id="monthlyKpiRow"></div>
+
+  <div class="card">
+    <h3>Expense by Month <span class="tag">monthly trend</span></h3>
+    <div class="chart-box tall"><canvas id="monthlyChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Monthly Trend Table <span class="tag" id="monthlyTableTag">months</span></h3>
+    <div class="scroll-table">
+    <table id="monthlyTable">
+      <thead><tr><th>Month</th><th class="num">Expense</th><th class="num">Budget</th><th class="num">Entries</th><th class="num">MoM Expense Δ</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-expensetype" class="tabpage">
+
+  <div class="kpis" id="expenseTypeKpiRow"></div>
+
+  <div class="card">
+    <h3>Expense by Type <span class="tag">bar chart</span></h3>
+    <div class="chart-box tall"><canvas id="expenseTypeAnalysisChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Expense Type Analysis <span class="tag" id="expenseTypeTableTag">types</span></h3>
+    <div class="search-row">
+      <input type="text" id="expenseTypeSearch" placeholder="Search expense type...">
+    </div>
+    <div class="scroll-table">
+    <table id="expenseTypeTable">
+      <thead><tr><th>Expense Type</th><th class="num">Expense</th><th class="num">Budget</th><th class="num">Entries</th><th class="num">Avg / Entry</th><th class="num">% of Total</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-clients" class="tabpage">
+
+  <div class="kpis" id="clientsKpiRow"></div>
+
+  <div class="card">
+    <h3>Top Clients by Expense <span class="tag">
+      Top <input type="text" class="topn-input" id="topNClientAnalysis" list="topNOptionsClientAnalysis" value="15"> clients, bar chart
+      <datalist id="topNOptionsClientAnalysis">
+        <option value="5"></option>
+        <option value="10"></option>
+        <option value="15"></option>
+        <option value="20"></option>
+        <option value="50"></option>
+        <option value="All"></option>
+      </datalist>
+    </span></h3>
+    <div class="chart-box tall"><canvas id="clientAnalysisChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Client Analysis <span class="tag" id="clientAnalysisTableTag">clients</span></h3>
+    <div class="search-row">
+      <input type="text" id="clientSearch" placeholder="Search client...">
+    </div>
+    <div class="scroll-table">
+    <table id="clientAnalysisTable">
+      <thead><tr><th>Client</th><th class="num">Expense</th><th class="num">Budget</th><th class="num">Entries</th><th class="num">Avg / Entry</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-sheets" class="tabpage">
+
+  <div class="kpis" id="sheetsKpiRow"></div>
+
+  <div class="card">
+    <h3>Expense by Source Sheet <span class="tag">bar chart</span></h3>
+    <div class="chart-box tall"><canvas id="sheetAnalysisChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Sheet-wise Analysis <span class="tag" id="sheetAnalysisTableTag">sheets</span></h3>
+    <div class="scroll-table">
+    <table id="sheetAnalysisTable">
+      <thead><tr><th>Sheet Name</th><th class="num">Expense</th><th class="num">Budget</th><th class="num">Entries</th><th class="num">Avg / Entry</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-quartercomp" class="tabpage">
+
+  <div class="kpis" id="quarterKpiRow"></div>
+
+  <div class="card">
+    <h3>Expense &amp; Budget by Quarter <span class="tag">quarter-on-quarter</span></h3>
+    <div class="chart-box tall"><canvas id="quarterChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Quarter-wise Table <span class="tag" id="quarterTableTag">quarters</span></h3>
+    <div class="scroll-table">
+    <table id="quarterTable">
+      <thead><tr><th>FY-Quarter</th><th class="num">Expense</th><th class="num">Budget</th><th class="num">Entries</th><th class="num">QoQ Expense Δ%</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-comparison" class="tabpage">
+
+  <div class="card">
+    <h3>Comparison Mode <span class="tag">compare 2 or more months, quarters, clients, expense types or sheets side by side</span></h3>
+    <div class="search-row cmp-controls">
+      <div class="cmp-field">
+        <label for="cmpDimension">Compare by</label>
+        <select id="cmpDimension">
+          <option value="month">Month</option>
+          <option value="fyQuarter">Quarter</option>
+          <option value="client">Client</option>
+          <option value="expenseType">Expense Type</option>
+          <option value="sheetName">Sheet Name</option>
+        </select>
+      </div>
+      <div class="cmp-field multiselect" style="min-width:260px;">
+        <label>Groups to compare</label>
+        <button type="button" class="ms-btn" id="cmpGroupsBtn">Select groups</button>
+        <div class="ms-panel" id="cmpGroupsPanel">
+          <input type="text" class="ms-search" id="cmpGroupsSearch" placeholder="Search...">
+          <div class="ms-actions">
+            <button type="button" id="cmpGroupsAll">Select all</button>
+            <button type="button" id="cmpGroupsClear">Clear</button>
+          </div>
+          <div class="ms-list" id="cmpGroupsList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kpis" id="cmpKpiRow"></div>
+
+  <div class="card">
+    <h3>Side-by-Side <span class="tag">expense, budget, entries</span></h3>
+    <div class="chart-box tall"><canvas id="cmpChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Comparison Table <span class="tag" id="cmpTableTag">groups, vs first selected</span></h3>
+    <div class="scroll-table">
+    <table id="cmpTable">
+      <thead><tr><th>Group</th><th class="num">Expense</th><th class="num">Expense Δ%</th><th class="num">Budget</th><th class="num">Entries</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-entries" class="tabpage">
+
+  <div class="kpis" id="entriesKpiRow"></div>
+
+  <div class="card">
+    <h3>All Entries <span class="tag" id="entriesTableTag">entries</span></h3>
+    <div class="search-row">
+      <input type="text" id="entriesSearch" placeholder="Search project code, client, expense type...">
+      <div class="multiselect" style="min-width:190px;">
+        <label>Columns</label>
+        <button type="button" class="ms-btn" id="entriesColsBtn">Select columns</button>
+        <div class="ms-panel" id="entriesColsPanel">
+          <input type="text" class="ms-search" id="entriesColsSearch" placeholder="Search columns...">
+          <div class="ms-actions">
+            <button type="button" id="entriesColsAll">All</button>
+            <button type="button" id="entriesColsClear">Clear</button>
+            <button type="button" id="entriesColsDefault">Default</button>
+          </div>
+          <div class="ms-list" id="entriesColsList"></div>
+        </div>
+      </div>
+    </div>
+    <div class="scroll-table">
+      <table id="entriesTable">
+        <thead id="entriesTableHead"></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  </div>
+
+</div>
+
+<script>
+// ROWS = row-level data coming from Python (one object per sheet row, already cleaned).
+// MONTH_ORDER = chronological list of month labels, used to sort month-based charts/filters.
+const ROWS = __ROWS_JSON__;
+const MONTH_ORDER = __MONTH_ORDER_JSON__;
+// ALL_HEADERS = every original Google Sheet column header (row.allColumns keys),
+// used to power the "Columns" picker on the All Entries table.
+const ALL_HEADERS = __ALL_HEADERS_JSON__;
+const DEFAULT_ENTRY_COLUMNS = __DEFAULT_COLUMNS_JSON__;
+
+// fmtCr: formats a raw rupee number for display, auto-picking the right unit -
+// "₹X.XX Cr" at 1 Cr (1e7) or more, "₹X.XX L" (Lakh) from 1 Lakh (1e5) up to 1 Cr,
+// and "₹X.XX K" below 1 Lakh.
+const fmtCr = v => {
+  if (v === null || v === undefined || isNaN(v)) return '-';
+  const abs = Math.abs(v);
+  if (abs >= 1e7){
+    return '₹' + (v/1e7).toFixed(2) + ' Cr';
+  }
+  if (abs >= 1e5){
+    return '₹' + (v/1e5).toFixed(2) + ' L';
+  }
+  return '₹' + fmtNum(Math.round(v));
+};
+// fmtNum: formats a number using Indian digit grouping (e.g. 12,34,567).
+const fmtNum = v => Number(v).toLocaleString('en-IN');
+
+// parseTopN: reads a Top-N control's value (typed or picked from the
+// datalist) and returns a positive integer, or Infinity for "All"/blank/
+// invalid input (which means "no limit, show everything").
+function parseTopN(value){
+  if (value === null || value === undefined) return Infinity;
+  const v = String(value).trim().toLowerCase();
+  if (v === '' || v === 'all' || v === '0') return Infinity;
+  const n = parseInt(v, 10);
+  return (isNaN(n) || n <= 0) ? Infinity : n;
+}
+
+Chart.defaults.color = '#8ea0c2';
+Chart.defaults.font.family = "'Segoe UI', Arial, sans-serif";
+Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+
+Chart.register(ChartDataLabels);
+Chart.defaults.set('plugins.datalabels', { display: false });
+
+const COLORS = {
+  gold:'#d9a441', teal:'#33b8a8', coral:'#e0665f', violet:'#8b7ee8', blue:'#4f8bd0'
+};
+const PALETTE = ['#d9a441','#33b8a8','#e0665f','#8b7ee8','#4f8bd0','#5cc96a','#e0a8d0','#e0d05f','#6fa8e0','#c98b5c','#8adfd4','#b98ae0'];
+
+// Derived field used for quarter grouping/sorting: "FY Q2" so the same
+// quarter label in different financial years doesn't collide.
+ROWS.forEach(r => { r.fyQuarter = (r.fy && r.quarter) ? (r.fy + ' ' + r.quarter) : (r.quarter || ''); });
+
+// fyQuarterSortKey: sorts "2025-26 Q3" style labels chronologically by the
+// starting year of the FY, then the quarter number.
+function fyQuarterSortKey(q){
+  const m = /(\d{4})\D+\d{2,4}\D+Q(\d)/.exec(String(q||''));
+  if (!m) return Number.MAX_SAFE_INTEGER;
+  return parseInt(m[1],10)*10 + parseInt(m[2],10);
+}
+
+// ---------------- Generic filter system (shared across all tabs) ----------------
+const FILTER_DEFS = [
+  {key:'fy', label:'Financial Year', field:'fy'},
+  {key:'quarter', label:'Quarter', field:'quarter'},
+  {key:'month', label:'Month', field:'month', order: MONTH_ORDER},
+  {key:'sheetName', label:'Sheet Name', field:'sheetName'},
+  {key:'client', label:'Client', field:'client'},
+  {key:'projectType', label:'Project Type', field:'projectType'},
+  {key:'entity', label:'Entity', field:'entity'},
+  {key:'expenseType', label:'Expense Type', field:'expenseType'},
+  {key:'projectCode', label:'Project Code', field:'projectCode'},
+];
+
+const activeFilters = {};
+FILTER_DEFS.forEach(f => activeFilters[f.key] = new Set());
+
+function uniqueValues(field, order){
+  const vals = Array.from(new Set(ROWS.map(r => r[field]).filter(v => v !== null && v !== undefined && v !== '')));
+  if (order && order.length){
+    const idx = new Map(order.map((m,i)=>[m,i]));
+    vals.sort((a,b) => (idx.has(a)?idx.get(a):999) - (idx.has(b)?idx.get(b):999));
+  } else {
+    vals.sort();
+  }
+  return vals;
+}
+
+function triggerFilterChange(){
+  const active = document.querySelector('.tabpage.active');
+  const tabId = active ? active.id : 'tab-overview';
+  renderTab(tabId);
+}
+
+function renderTab(tabId){
+  if (tabId === 'tab-overview') renderAll();
+  else if (tabId === 'tab-monthly') renderMonthlyTab();
+  else if (tabId === 'tab-expensetype') renderExpenseTypeTab();
+  else if (tabId === 'tab-clients') renderClientsTab();
+  else if (tabId === 'tab-sheets') renderSheetsTab();
+  else if (tabId === 'tab-quartercomp') renderQuarterTab();
+  else if (tabId === 'tab-comparison') populateCmpGroups();
+  else if (tabId === 'tab-entries') renderEntriesTab();
+}
+
+function buildFilterBar(){
+  const bar = document.getElementById('filterBar');
+  bar.innerHTML = '';
+
+  FILTER_DEFS.forEach(f => {
+    const values = uniqueValues(f.field, f.order);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'multiselect';
+    wrap.innerHTML = `
+      <label>${f.label}</label>
+      <button type="button" class="ms-btn" id="msbtn_${f.key}">All</button>
+      <div class="ms-panel" id="mspanel_${f.key}">
+        <input type="text" class="ms-search" placeholder="Search...">
+        <div class="ms-actions">
+          <button type="button" class="ms-all">Select all</button>
+          <button type="button" class="ms-clear">Clear</button>
+        </div>
+        <div class="ms-list"></div>
+      </div>
+    `;
+    bar.appendChild(wrap);
+
+    const listEl = wrap.querySelector('.ms-list');
+    const btn = wrap.querySelector('.ms-btn');
+    const panel = wrap.querySelector('.ms-panel');
+
+    values.forEach(v => {
+      const row = document.createElement('label');
+      row.className = 'ms-option';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = v;
+      const span = document.createElement('span');
+      span.textContent = v;
+      row.appendChild(cb);
+      row.appendChild(span);
+      listEl.appendChild(row);
+    });
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.ms-panel.open').forEach(p => { if (p !== panel) p.classList.remove('open'); });
+      panel.classList.toggle('open');
+    });
+    panel.addEventListener('click', (e) => e.stopPropagation());
+
+    wrap.querySelector('.ms-search').addEventListener('input', (e) => {
+      const term = e.target.value.toLowerCase();
+      listEl.querySelectorAll('.ms-option').forEach(opt => {
+        opt.style.display = opt.textContent.toLowerCase().includes(term) ? '' : 'none';
+      });
+    });
+
+    wrap.querySelector('.ms-all').addEventListener('click', () => {
+      listEl.querySelectorAll('.ms-option').forEach(opt => {
+        if (opt.style.display !== 'none') opt.querySelector('input').checked = true;
+      });
+      applyMultiSelect(f.key, listEl, btn);
+    });
+    wrap.querySelector('.ms-clear').addEventListener('click', () => {
+      listEl.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+      applyMultiSelect(f.key, listEl, btn);
+    });
+
+    listEl.addEventListener('change', () => applyMultiSelect(f.key, listEl, btn));
+  });
+}
+
+function applyMultiSelect(key, listEl, btn){
+  const checked = Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(c => c.value);
+  activeFilters[key] = new Set(checked);
+  btn.textContent = checked.length === 0 ? 'All' : (checked.length === 1 ? checked[0] : checked.length + ' selected');
+  btn.classList.toggle('active', checked.length > 0);
+  triggerFilterChange();
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.ms-panel.open').forEach(p => p.classList.remove('open'));
+  document.querySelectorAll('.theme-panel.open').forEach(p => p.classList.remove('open'));
+});
+
+document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+  FILTER_DEFS.forEach(f => {
+    activeFilters[f.key] = new Set();
+    const panel = document.getElementById('mspanel_' + f.key);
+    if (panel) panel.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+    const btn = document.getElementById('msbtn_' + f.key);
+    if (btn) { btn.textContent = 'All'; btn.classList.remove('active'); }
+  });
+  triggerFilterChange();
+});
+
+function rowMatches(row){
+  return FILTER_DEFS.every(f => {
+    const selected = activeFilters[f.key];
+    if (!selected || selected.size === 0) return true;
+    return selected.has(String(row[f.field] ?? ''));
+  });
+}
+
+function getFilteredRows(){
+  return ROWS.filter(rowMatches);
+}
+
+// drillFilter: sets a single exact-match filter (used when the person clicks
+// a bar/segment on any chart) and jumps to the All Entries tab.
+function drillFilter(key, value){
+  if (value === undefined || value === null || value === '') return;
+  activeFilters[key] = new Set([value]);
+  const listEl = document.querySelector('#mspanel_' + key + ' .ms-list');
+  const btn = document.getElementById('msbtn_' + key);
+  if (listEl){
+    listEl.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = (c.value === value); });
+  }
+  if (btn){ btn.textContent = value; btn.classList.add('active'); }
+  const entriesBtn = document.querySelector('.tabbtn[data-tab="entries"]');
+  if (entriesBtn) entriesBtn.click();
+}
+
+// ---------------- Client-side aggregation from row-level data ----------------
+// aggregateBy: groups rows by a field and sums Expense (subtotal), Budget
+// and Entries. Used for client/expenseType/sheet/month/quarter charts & tables.
+function aggregateBy(rows, field){
+  const map = new Map();
+  rows.forEach(r => {
+    const key = r[field] || '(blank)';
+    if (!map.has(key)) map.set(key, {Expense:0, Budget:0, Entries:0});
+    const g = map.get(key);
+    g.Expense += (r.subtotal || 0);
+    g.Budget += (r.budget || 0);
+    g.Entries += 1;
+  });
+  return Array.from(map.entries()).map(([key, g]) => ({
+    key, ...g,
+    AvgPerEntry: g.Entries ? (g.Expense / g.Entries) : 0
+  }));
+}
+
+// ---------------- Overview tab rendering ----------------
+let charts = {};
+function destroy(id){ if(charts[id]){ charts[id].destroy(); } }
+
+function renderKPIs(){
+  const rows = getFilteredRows();
+  const totalExpense = rows.reduce((a,b)=>a+(b.subtotal||0),0);
+  const totalBudget = rows.reduce((a,b)=>a+(b.budget||0),0);
+  const totalEntries = rows.length;
+  const uniqueClients = new Set(rows.map(r=>r.client).filter(Boolean)).size;
+  const avgPerEntry = totalEntries ? (totalExpense/totalEntries) : 0;
+
+  const kpiRow = document.getElementById('kpiRow');
+  kpiRow.innerHTML = '';
+  const items = [
+    {label:'Total Expense', value: fmtCr(totalExpense)},
+    {label:'Total Budget', value: fmtCr(totalBudget)},
+    {label:'Total Entries', value: fmtNum(totalEntries)},
+    {label:'Unique Clients', value: fmtNum(uniqueClients)},
+    {label:'Avg per Entry', value: fmtCr(avgPerEntry)}
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    kpiRow.appendChild(div);
+  });
+}
+
+function renderTrend(){
+  destroy('trend');
+  const ctx = document.getElementById('trendChart');
+  const rows = getFilteredRows();
+  const agg = aggregateBy(rows, 'month');
+  const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
+  agg.sort((a,b)=> (idx.has(a.key)?idx.get(a.key):999) - (idx.has(b.key)?idx.get(b.key):999));
+  const labels = agg.map(m=>m.key);
+  charts.trend = new Chart(ctx, {
+    data:{
+      labels,
+      datasets:[
+        {type:'bar', label:'Expense (₹)', data: agg.map(m=>Math.round(m.Expense/1e5)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5, yAxisID:'y'},
+        {type:'line', label:'Entries', data: agg.map(m=>m.Entries), borderColor:COLORS.teal, backgroundColor:COLORS.teal, tension:0.35, yAxisID:'y1', pointRadius:4}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      layout:{padding:{top:18}},
+      scales:{
+        y:{position:'left', grid:{color:'rgba(255,255,255,0.06)'}, title:{display:true,text:'₹ Lakh'}},
+        y1:{position:'right', grid:{display:false}, title:{display:true,text:'Entries'}, min:0}
+      },
+      plugins:{
+        legend:{position:'bottom', labels:{boxWidth:12}},
+        datalabels:{
+          display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'top',
+          formatter:(v, ctx)=> ctx.dataset.type==='line' ? v : v
+        }
+      },
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('month', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderExpenseTypeChart(){
+  destroy('expenseType');
+  const ctx = document.getElementById('expenseTypeChart');
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'expenseType')].sort((a,b)=>b.Expense-a.Expense);
+  const labels = agg.map(e=>e.key);
+  charts.expenseType = new Chart(ctx, {
+    type:'doughnut',
+    data:{
+      labels,
+      datasets:[{data: agg.map(e=>e.Expense), backgroundColor: PALETTE, borderWidth:2, borderColor:'#121b2e'}]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'bottom'},
+        tooltip:{callbacks:{label:(c)=> c.label + ': ' + fmtCr(c.raw)}},
+        datalabels:{ display:false }
+      },
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('expenseType', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderClient(){
+  destroy('client');
+  const ctx = document.getElementById('clientChart');
+  const rows = getFilteredRows();
+  const agg = aggregateBy(rows, 'client');
+  const sorted = [...agg].sort((a,b)=>b.Expense-a.Expense);
+  const n = (typeof topNOverview !== 'undefined') ? topNOverview : 10;
+  const top = n === Infinity ? sorted : sorted.slice(0, n);
+  const rawKeys = top.map(c=>c.key);
+  charts.client = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: top.map(c=>c.key.length>22? c.key.slice(0,20)+'…': c.key),
+      datasets:[{label:'Expense (₹ L)', data: top.map(c=>+(c.Expense/1e5).toFixed(2)), backgroundColor: PALETTE[4], borderRadius:5}]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'right', formatter:(v)=> v }
+      },
+      scales:{x:{title:{display:true, text:'₹ Lakh'}}},
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('client', rawKeys[elements[0].index]); }
+    }
+  });
+}
+
+function renderSheetChart(){
+  destroy('sheet');
+  const ctx = document.getElementById('sheetChart');
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'sheetName')].sort((a,b)=>b.Expense-a.Expense);
+  const labels = agg.map(s=>s.key);
+  charts.sheet = new Chart(ctx, {
+    type:'pie',
+    data:{
+      labels,
+      datasets:[{data: agg.map(s=>s.Expense), backgroundColor: PALETTE, borderWidth:2, borderColor:'#121b2e'}]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'bottom'},
+        tooltip:{callbacks:{label:(c)=> c.label + ': ' + fmtCr(c.raw)}},
+        datalabels:{ display:false }
+      },
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('sheetName', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderTable(){
+  const tbody = document.querySelector('#clientTable tbody');
+  tbody.innerHTML='';
+  const rows = getFilteredRows();
+  let agg = [...aggregateBy(rows, 'client')].sort((a,b)=>b.Expense-a.Expense);
+  const fullCount = agg.length;
+  const n = (typeof topNOverview !== 'undefined') ? topNOverview : Infinity;
+  if (n !== Infinity) agg = agg.slice(0, n);
+  agg.forEach(c=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${c.key}</td><td class="num">${fmtNum(c.Entries)}</td><td class="num">${fmtCr(c.Budget)}</td><td class="num">${fmtCr(c.Expense)}</td><td class="num">${fmtCr(c.AvgPerEntry)}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('clientTableTag').textContent = (n === Infinity ? agg.length + ' clients' : agg.length + ' of ' + fullCount + ' clients (top ' + n + ')');
+}
+
+function renderAll(){
+  renderKPIs();
+  renderTrend();
+  renderExpenseTypeChart();
+  renderClient();
+  renderSheetChart();
+  renderTable();
+}
+
+let topNOverview = 10;
+document.getElementById('topNOverview').addEventListener('input', e=>{
+  topNOverview = parseTopN(e.target.value);
+  renderClient();
+  renderTable();
+});
+document.getElementById('topNOverview').addEventListener('change', e=>{
+  topNOverview = parseTopN(e.target.value);
+  renderClient();
+  renderTable();
+});
+
+// ---------------- Monthly Trend tab ----------------
+function renderMonthlyKPIs(agg){
+  const row = document.getElementById('monthlyKpiRow');
+  row.innerHTML = '';
+  const totalExpense = agg.reduce((a,b)=>a+b.Expense,0);
+  const totalBudget = agg.reduce((a,b)=>a+b.Budget,0);
+  const bestMonth = agg.length ? [...agg].sort((a,b)=>b.Expense-a.Expense)[0] : null;
+  const items = [
+    {label:'Total Expense', value: fmtCr(totalExpense)},
+    {label:'Total Budget', value: fmtCr(totalBudget)},
+    {label:'Months in View', value: fmtNum(agg.length)},
+    {label:'Highest Expense Month', value: bestMonth ? bestMonth.key : '-'},
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    row.appendChild(div);
+  });
+}
+
+function renderMonthlyChart(agg){
+  destroy('monthly');
+  const ctx = document.getElementById('monthlyChart');
+  const labels = agg.map(m=>m.key);
+  charts.monthly = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {label:'Expense (₹ L)', data: agg.map(m=>+(m.Expense/1e5).toFixed(2)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5},
+        {label:'Budget (₹ L)', data: agg.map(m=>+(m.Budget/1e5).toFixed(2)), backgroundColor:'rgba(79,139,208,0.55)', borderRadius:5}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      layout:{padding:{top:18}},
+      plugins:{
+        legend:{position:'bottom'},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'top', formatter:(v)=> v }
+      },
+      scales:{y:{title:{display:true,text:'₹ Lakh'}}},
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('month', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderMonthlyTable(agg){
+  const tbody = document.querySelector('#monthlyTable tbody');
+  tbody.innerHTML = '';
+  agg.forEach((m,i)=>{
+    const tr = document.createElement('tr');
+    const prev = i>0 ? agg[i-1] : null;
+    const expDelta = (prev && prev.Expense) ? ((m.Expense-prev.Expense)/Math.abs(prev.Expense)*100) : null;
+    const expDeltaHtml = expDelta===null ? '-' : `<span class="${expDelta>=0?'up':'down'}">${expDelta>=0?'+':''}${Math.round(expDelta)}%</span>`;
+    tr.innerHTML = `<td>${m.key}</td><td class="num">${fmtCr(m.Expense)}</td><td class="num">${fmtCr(m.Budget)}</td><td class="num">${fmtNum(m.Entries)}</td><td class="num">${expDeltaHtml}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('monthlyTableTag').textContent = agg.length + ' months';
+}
+
+function renderMonthlyTab(){
+  const rows = getFilteredRows();
+  const agg = aggregateBy(rows, 'month');
+  const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
+  agg.sort((a,b)=> (idx.has(a.key)?idx.get(a.key):999) - (idx.has(b.key)?idx.get(b.key):999));
+  renderMonthlyKPIs(agg);
+  renderMonthlyChart(agg);
+  renderMonthlyTable(agg);
+}
+
+// ---------------- Expense Type tab ----------------
+let expenseTypeSearchTerm = '';
+
+function renderExpenseTypeKPIs(agg, total){
+  const row = document.getElementById('expenseTypeKpiRow');
+  row.innerHTML = '';
+  const best = agg.length ? [...agg].sort((a,b)=>b.Expense-a.Expense)[0] : null;
+  const items = [
+    {label:'Expense Types', value: fmtNum(agg.length)},
+    {label:'Total Expense', value: fmtCr(total)},
+    {label:'Top Expense Type', value: best ? best.key : '-'},
+    {label:'Top Type Share', value: (best && total) ? Math.round(best.Expense/total*100)+'%' : '-'},
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    row.appendChild(div);
+  });
+}
+
+function renderExpenseTypeAnalysisChart(agg){
+  destroy('expenseTypeAnalysis');
+  const ctx = document.getElementById('expenseTypeAnalysisChart');
+  const labels = agg.map(e=>e.key);
+  charts.expenseTypeAnalysis = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[{label:'Expense (₹ L)', data: agg.map(e=>+(e.Expense/1e5).toFixed(2)), backgroundColor: PALETTE[2], borderRadius:5}]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'right', formatter:(v)=> v }
+      },
+      scales:{x:{title:{display:true, text:'₹ Lakh'}}},
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('expenseType', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderExpenseTypeAnalysisTable(agg, total){
+  const tbody = document.querySelector('#expenseTypeTable tbody');
+  tbody.innerHTML = '';
+  const term = expenseTypeSearchTerm.trim().toLowerCase();
+  const filtered = term ? agg.filter(e => e.key.toLowerCase().includes(term)) : agg;
+  filtered.forEach(e=>{
+    const tr = document.createElement('tr');
+    const pct = total ? Math.round(e.Expense/total*100) : 0;
+    tr.innerHTML = `<td>${e.key}</td><td class="num">${fmtCr(e.Expense)}</td><td class="num">${fmtCr(e.Budget)}</td><td class="num">${fmtNum(e.Entries)}</td><td class="num">${fmtCr(e.AvgPerEntry)}</td><td class="num">${pct}%</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('expenseTypeTableTag').textContent = filtered.length + ' of ' + agg.length + ' types';
+}
+
+function renderExpenseTypeTab(){
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'expenseType')].sort((a,b)=>b.Expense-a.Expense);
+  const total = agg.reduce((a,b)=>a+b.Expense,0);
+  renderExpenseTypeKPIs(agg, total);
+  renderExpenseTypeAnalysisChart(agg);
+  renderExpenseTypeAnalysisTable(agg, total);
+}
+
+document.getElementById('expenseTypeSearch').addEventListener('input', e=>{
+  expenseTypeSearchTerm = e.target.value;
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'expenseType')].sort((a,b)=>b.Expense-a.Expense);
+  const total = agg.reduce((a,b)=>a+b.Expense,0);
+  renderExpenseTypeAnalysisTable(agg, total);
+});
+
+// ---------------- Client Analysis tab ----------------
+let clientSearchTerm = '';
+let topNClientAnalysis = 15;
+
+function renderClientsKPIs(agg){
+  const row = document.getElementById('clientsKpiRow');
+  row.innerHTML = '';
+  const totalExpense = agg.reduce((a,b)=>a+b.Expense,0);
+  const totalBudget = agg.reduce((a,b)=>a+b.Budget,0);
+  const items = [
+    {label:'Total Clients', value: fmtNum(agg.length)},
+    {label:'Total Expense', value: fmtCr(totalExpense)},
+    {label:'Total Budget', value: fmtCr(totalBudget)},
+    {label:'Avg per Client', value: agg.length ? fmtCr(totalExpense/agg.length) : '-'},
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    row.appendChild(div);
+  });
+}
+
+function renderClientAnalysisChart(agg){
+  destroy('clientAnalysis');
+  const ctx = document.getElementById('clientAnalysisChart');
+  const n = (typeof topNClientAnalysis !== 'undefined' && topNClientAnalysis !== Infinity) ? topNClientAnalysis : agg.length;
+  const top = agg.slice(0, n);
+  const rawKeys = top.map(c=>c.key);
+  charts.clientAnalysis = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: top.map(c=>c.key.length>26? c.key.slice(0,24)+'…': c.key),
+      datasets:[{label:'Expense (₹ L)', data: top.map(c=>+(c.Expense/1e5).toFixed(2)), backgroundColor: PALETTE[4], borderRadius:5}]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'right', formatter:(v)=> v }
+      },
+      scales:{x:{title:{display:true, text:'₹ Lakh'}}},
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('client', rawKeys[elements[0].index]); }
+    }
+  });
+}
+
+function renderClientAnalysisTable(agg){
+  const tbody = document.querySelector('#clientAnalysisTable tbody');
+  tbody.innerHTML = '';
+  const term = clientSearchTerm.trim().toLowerCase();
+  let filtered = term ? agg.filter(c => c.key.toLowerCase().includes(term)) : agg;
+  const fullCount = filtered.length;
+  const n = (typeof topNClientAnalysis !== 'undefined' && topNClientAnalysis !== Infinity) ? topNClientAnalysis : filtered.length;
+  filtered = filtered.slice(0, n);
+  filtered.forEach(c=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${c.key}</td><td class="num">${fmtCr(c.Expense)}</td><td class="num">${fmtCr(c.Budget)}</td><td class="num">${fmtNum(c.Entries)}</td><td class="num">${fmtCr(c.AvgPerEntry)}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('clientAnalysisTableTag').textContent = filtered.length + ' of ' + fullCount + ' clients';
+}
+
+function renderClientsTab(){
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'client')].sort((a,b)=>b.Expense-a.Expense);
+  renderClientsKPIs(agg);
+  renderClientAnalysisChart(agg);
+  renderClientAnalysisTable(agg);
+}
+
+document.getElementById('clientSearch').addEventListener('input', e=>{
+  clientSearchTerm = e.target.value;
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'client')].sort((a,b)=>b.Expense-a.Expense);
+  renderClientAnalysisTable(agg);
+});
+
+function handleTopNClientAnalysisChange(e){
+  topNClientAnalysis = parseTopN(e.target.value);
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'client')].sort((a,b)=>b.Expense-a.Expense);
+  renderClientAnalysisChart(agg);
+  renderClientAnalysisTable(agg);
+}
+document.getElementById('topNClientAnalysis').addEventListener('input', handleTopNClientAnalysisChange);
+document.getElementById('topNClientAnalysis').addEventListener('change', handleTopNClientAnalysisChange);
+
+// ---------------- Sheet-wise tab ----------------
+function renderSheetsKPIs(agg){
+  const row = document.getElementById('sheetsKpiRow');
+  row.innerHTML = '';
+  const totalExpense = agg.reduce((a,b)=>a+b.Expense,0);
+  const best = agg.length ? [...agg].sort((a,b)=>b.Expense-a.Expense)[0] : null;
+  const items = [
+    {label:'Source Sheets', value: fmtNum(agg.length)},
+    {label:'Total Expense', value: fmtCr(totalExpense)},
+    {label:'Largest Source Sheet', value: best ? best.key : '-'},
+    {label:'Its Share', value: (best && totalExpense) ? Math.round(best.Expense/totalExpense*100)+'%' : '-'},
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    row.appendChild(div);
+  });
+}
+
+function renderSheetAnalysisChart(agg){
+  destroy('sheetAnalysis');
+  const ctx = document.getElementById('sheetAnalysisChart');
+  const labels = agg.map(s=>s.key);
+  charts.sheetAnalysis = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[{label:'Expense (₹ L)', data: agg.map(s=>+(s.Expense/1e5).toFixed(2)), backgroundColor: PALETTE[3], borderRadius:5}]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'right', formatter:(v)=> v }
+      },
+      scales:{x:{title:{display:true, text:'₹ Lakh'}}},
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('sheetName', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderSheetAnalysisTable(agg){
+  const tbody = document.querySelector('#sheetAnalysisTable tbody');
+  tbody.innerHTML = '';
+  agg.forEach(s=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${s.key}</td><td class="num">${fmtCr(s.Expense)}</td><td class="num">${fmtCr(s.Budget)}</td><td class="num">${fmtNum(s.Entries)}</td><td class="num">${fmtCr(s.AvgPerEntry)}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('sheetAnalysisTableTag').textContent = agg.length + ' sheets';
+}
+
+function renderSheetsTab(){
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'sheetName')].sort((a,b)=>b.Expense-a.Expense);
+  renderSheetsKPIs(agg);
+  renderSheetAnalysisChart(agg);
+  renderSheetAnalysisTable(agg);
+}
+
+// ---------------- Quarter Comparison tab ----------------
+function renderQuarterKPIs(agg){
+  const row = document.getElementById('quarterKpiRow');
+  row.innerHTML = '';
+  const totalExpense = agg.reduce((a,b)=>a+b.Expense,0);
+  const totalBudget = agg.reduce((a,b)=>a+b.Budget,0);
+  const last = agg.length ? agg[agg.length-1] : null;
+  const prevLast = agg.length>1 ? agg[agg.length-2] : null;
+  const qoqExp = (last && prevLast && prevLast.Expense) ? ((last.Expense-prevLast.Expense)/Math.abs(prevLast.Expense)*100) : null;
+  const items = [
+    {label:'Total Expense', value: fmtCr(totalExpense)},
+    {label:'Total Budget', value: fmtCr(totalBudget)},
+    {label:'Quarters in View', value: fmtNum(agg.length)},
+    {label:'Latest QoQ Expense Change', value: qoqExp===null?'-':(qoqExp>=0?'+':'')+Math.round(qoqExp)+'%', cls: qoqExp===null?'':(qoqExp>=0?'down':'up')},
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>` + (it.cls!==undefined?`<div class="delta ${it.cls||''}"></div>`:'');
+    row.appendChild(div);
+  });
+}
+
+function renderQuarterChart(agg){
+  destroy('quarter');
+  const ctx = document.getElementById('quarterChart');
+  const labels = agg.map(q=>q.key);
+  charts.quarter = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {label:'Expense (₹ L)', data: agg.map(q=>+(q.Expense/1e5).toFixed(2)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5},
+        {label:'Budget (₹ L)', data: agg.map(q=>+(q.Budget/1e5).toFixed(2)), backgroundColor:'rgba(79,139,208,0.55)', borderRadius:5}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      layout:{padding:{top:18}},
+      plugins:{
+        legend:{position:'bottom'},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:10, weight:'600'}, anchor:'end', align:'top', formatter:(v)=> v }
+      },
+      scales:{y:{title:{display:true,text:'₹ Lakh'}}},
+      onClick:(evt, elements)=>{ if(elements.length) drillFilter('fyQuarter', labels[elements[0].index]); }
+    }
+  });
+}
+
+function renderQuarterTable(agg){
+  const tbody = document.querySelector('#quarterTable tbody');
+  tbody.innerHTML = '';
+  agg.forEach((q,i)=>{
+    const tr = document.createElement('tr');
+    const prev = i>0 ? agg[i-1] : null;
+    const expDelta = (prev && prev.Expense) ? ((q.Expense-prev.Expense)/Math.abs(prev.Expense)*100) : null;
+    const expDeltaHtml = expDelta===null ? '-' : `<span class="${expDelta>=0?'up':'down'}">${expDelta>=0?'+':''}${Math.round(expDelta)}%</span>`;
+    tr.innerHTML = `<td>${q.key}</td><td class="num">${fmtCr(q.Expense)}</td><td class="num">${fmtCr(q.Budget)}</td><td class="num">${fmtNum(q.Entries)}</td><td class="num">${expDeltaHtml}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('quarterTableTag').textContent = agg.length + ' quarters';
+}
+
+function renderQuarterTab(){
+  const rows = getFilteredRows();
+  const agg = [...aggregateBy(rows, 'fyQuarter')].filter(q=>q.key && q.key !== '(blank)');
+  agg.sort((a,b)=> fyQuarterSortKey(a.key) - fyQuarterSortKey(b.key));
+  renderQuarterKPIs(agg);
+  renderQuarterChart(agg);
+  renderQuarterTable(agg);
+}
+
+// ---------------- Comparison tab ----------------
+let cmpSelectedGroups = new Set();
+
+function populateCmpGroups(){
+  const dim = document.getElementById('cmpDimension').value;
+  const rows = getFilteredRows();
+  const agg = aggregateBy(rows, dim);
+  let sortedForOrder = [...agg];
+  if (dim === 'month'){
+    const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
+    sortedForOrder.sort((a,b)=> (idx.has(a.key)?idx.get(a.key):999) - (idx.has(b.key)?idx.get(b.key):999));
+  } else if (dim === 'fyQuarter'){
+    sortedForOrder.sort((a,b)=> fyQuarterSortKey(a.key) - fyQuarterSortKey(b.key));
+  } else {
+    sortedForOrder.sort((a,b)=>b.Expense-a.Expense);
+  }
+  const values = sortedForOrder.map(a=>a.key);
+
+  const stillValid = new Set(values.filter(v => cmpSelectedGroups.has(v)));
+  if (stillValid.size === 0 && values.length){
+    const byExpense = [...agg].sort((a,b)=>b.Expense-a.Expense).slice(0,3).map(a=>a.key);
+    byExpense.forEach(v=>stillValid.add(v));
+  }
+  cmpSelectedGroups = stillValid;
+
+  const listEl = document.getElementById('cmpGroupsList');
+  listEl.innerHTML = '';
+  values.forEach(v=>{
+    const row = document.createElement('label');
+    row.className = 'ms-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = v;
+    cb.checked = cmpSelectedGroups.has(v);
+    const span = document.createElement('span');
+    span.textContent = v;
+    row.appendChild(cb); row.appendChild(span);
+    listEl.appendChild(row);
+  });
+
+  updateCmpGroupsBtn();
+  renderComparisonTab();
+}
+
+function updateCmpGroupsBtn(){
+  const btn = document.getElementById('cmpGroupsBtn');
+  const n = cmpSelectedGroups.size;
+  btn.textContent = n === 0 ? 'Select groups' : (n === 1 ? [...cmpSelectedGroups][0] : n + ' groups selected');
+  btn.classList.toggle('active', n>0);
+}
+
+document.getElementById('cmpGroupsBtn').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  document.querySelectorAll('.ms-panel.open').forEach(p=>{ if(p.id!=='cmpGroupsPanel') p.classList.remove('open'); });
+  document.getElementById('cmpGroupsPanel').classList.toggle('open');
+});
+document.getElementById('cmpGroupsPanel').addEventListener('click', e=>e.stopPropagation());
+document.getElementById('cmpGroupsSearch').addEventListener('input', e=>{
+  const term = e.target.value.toLowerCase();
+  document.querySelectorAll('#cmpGroupsList .ms-option').forEach(opt=>{
+    opt.style.display = opt.textContent.toLowerCase().includes(term) ? '' : 'none';
+  });
+});
+document.getElementById('cmpGroupsAll').addEventListener('click', ()=>{
+  document.querySelectorAll('#cmpGroupsList .ms-option').forEach(opt=>{
+    if (opt.style.display !== 'none') opt.querySelector('input').checked = true;
+  });
+  cmpSelectedGroups = new Set(Array.from(document.querySelectorAll('#cmpGroupsList input:checked')).map(c=>c.value));
+  updateCmpGroupsBtn();
+  renderComparisonTab();
+});
+document.getElementById('cmpGroupsClear').addEventListener('click', ()=>{
+  document.querySelectorAll('#cmpGroupsList input').forEach(c=>c.checked=false);
+  cmpSelectedGroups = new Set();
+  updateCmpGroupsBtn();
+  renderComparisonTab();
+});
+document.getElementById('cmpGroupsList').addEventListener('change', ()=>{
+  cmpSelectedGroups = new Set(Array.from(document.querySelectorAll('#cmpGroupsList input:checked')).map(c=>c.value));
+  updateCmpGroupsBtn();
+  renderComparisonTab();
+});
+document.getElementById('cmpDimension').addEventListener('change', ()=>{
+  cmpSelectedGroups = new Set();
+  populateCmpGroups();
+});
+
+function renderComparisonTab(){
+  const dim = document.getElementById('cmpDimension').value;
+  const rows = getFilteredRows();
+  const agg = aggregateBy(rows, dim);
+  const map = new Map(agg.map(a=>[a.key, a]));
+
+  let selected = Array.from(cmpSelectedGroups);
+  if (dim === 'month'){
+    const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
+    selected.sort((a,b)=> (idx.has(a)?idx.get(a):999) - (idx.has(b)?idx.get(b):999));
+  } else if (dim === 'fyQuarter'){
+    selected.sort((a,b)=> fyQuarterSortKey(a) - fyQuarterSortKey(b));
+  } else {
+    selected.sort();
+  }
+
+  const groups = selected.map(key => ({ key, ...(map.get(key) || {Expense:0, Budget:0, Entries:0}) }));
+
+  const row = document.getElementById('cmpKpiRow');
+  row.innerHTML = '';
+  if (groups.length){
+    const totalExpense = groups.reduce((a,b)=>a+b.Expense,0);
+    const totalBudget = groups.reduce((a,b)=>a+b.Budget,0);
+    const best = [...groups].sort((a,b)=>b.Expense-a.Expense)[0];
+    const worst = [...groups].sort((a,b)=>a.Expense-b.Expense)[0];
+    const items = [
+      {label:'Groups Selected', value: fmtNum(groups.length)},
+      {label:'Combined Expense', value: fmtCr(totalExpense)},
+      {label:'Combined Budget', value: fmtCr(totalBudget)},
+      {label:'Highest Expense', value: best ? `${best.key} (${fmtCr(best.Expense)})` : '-'},
+      {label:'Lowest Expense', value: worst ? `${worst.key} (${fmtCr(worst.Expense)})` : '-'},
+    ];
+    items.forEach(it=>{
+      const div = document.createElement('div'); div.className='kpi';
+      div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+      row.appendChild(div);
+    });
+  }
+
+  destroy('cmp');
+  const ctx = document.getElementById('cmpChart');
+  charts.cmp = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels:['Expense (₹ L)','Budget (₹ L)','Entries'],
+      datasets: groups.map((g,i)=>({
+        label: g.key,
+        data: [+(g.Expense/1e5).toFixed(2), +(g.Budget/1e5).toFixed(2), g.Entries],
+        backgroundColor: PALETTE[i % PALETTE.length],
+        borderRadius:5
+      }))
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      layout:{padding:{top:18}},
+      plugins:{
+        legend:{position:'bottom'},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:9, weight:'600'}, anchor:'end', align:'top', formatter:(v)=> v }
+      }
+    }
+  });
+
+  const tbody = document.querySelector('#cmpTable tbody');
+  tbody.innerHTML = '';
+  const baseline = groups.length ? groups[0] : null;
+  groups.forEach((g,i)=>{
+    const tr = document.createElement('tr');
+    let expDeltaHtml = '-';
+    if (i===0){
+      expDeltaHtml = '<span class="delta">baseline</span>';
+    } else if (baseline){
+      const expDelta = baseline.Expense ? ((g.Expense-baseline.Expense)/Math.abs(baseline.Expense)*100) : null;
+      expDeltaHtml = expDelta===null ? '-' : `<span class="${expDelta>=0?'up':'down'}">${expDelta>=0?'+':''}${Math.round(expDelta)}%</span>`;
+    }
+    tr.innerHTML = `<td>${g.key}</td><td class="num">${fmtCr(g.Expense)}</td><td class="num">${expDeltaHtml}</td><td class="num">${fmtCr(g.Budget)}</td><td class="num">${fmtNum(g.Entries)}</td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('cmpTableTag').textContent = groups.length + ' groups, vs ' + (baseline ? baseline.key : 'first selected');
+}
+
+document.querySelectorAll('.tabbtn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tabpage').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    const tabId = 'tab-'+btn.dataset.tab;
+    document.getElementById(tabId).classList.add('active');
+    renderTab(tabId);
+  });
+});
+
+// ---------------- All Entries tab ----------------
+let entriesSearchTerm = '';
+
+const ENTRY_COLUMN_OPTIONS = [...ALL_HEADERS];
+
+let entriesSelectedColumns = new Set(
+  (DEFAULT_ENTRY_COLUMNS && DEFAULT_ENTRY_COLUMNS.length) ? DEFAULT_ENTRY_COLUMNS : ALL_HEADERS
+);
+
+function entryColValue(p, col){
+  const v = (p.allColumns && p.allColumns[col] !== undefined) ? p.allColumns[col] : '';
+  if (v === null || v === undefined || v === '') return '';
+  return String(v);
+}
+
+function buildEntriesColsPanel(){
+  const listEl = document.getElementById('entriesColsList');
+  listEl.innerHTML = '';
+  ENTRY_COLUMN_OPTIONS.forEach(c=>{
+    const row = document.createElement('label');
+    row.className = 'ms-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = c;
+    cb.checked = entriesSelectedColumns.has(c);
+    const span = document.createElement('span');
+    span.textContent = c;
+    row.appendChild(cb); row.appendChild(span);
+    listEl.appendChild(row);
+  });
+  updateEntriesColsBtn();
+}
+
+function updateEntriesColsBtn(){
+  const btn = document.getElementById('entriesColsBtn');
+  const n = entriesSelectedColumns.size;
+  btn.textContent = n === 0 ? 'Select columns' : n + ' columns selected';
+  btn.classList.toggle('active', n>0);
+}
+
+document.getElementById('entriesColsBtn').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  document.querySelectorAll('.ms-panel.open').forEach(p=>{ if(p.id!=='entriesColsPanel') p.classList.remove('open'); });
+  document.getElementById('entriesColsPanel').classList.toggle('open');
+});
+document.getElementById('entriesColsPanel').addEventListener('click', e=>e.stopPropagation());
+document.getElementById('entriesColsSearch').addEventListener('input', e=>{
+  const term = e.target.value.toLowerCase();
+  document.querySelectorAll('#entriesColsList .ms-option').forEach(opt=>{
+    opt.style.display = opt.textContent.toLowerCase().includes(term) ? '' : 'none';
+  });
+});
+document.getElementById('entriesColsAll').addEventListener('click', ()=>{
+  document.querySelectorAll('#entriesColsList .ms-option').forEach(opt=>{
+    if (opt.style.display !== 'none') opt.querySelector('input').checked = true;
+  });
+  entriesSelectedColumns = new Set(Array.from(document.querySelectorAll('#entriesColsList input:checked')).map(c=>c.value));
+  updateEntriesColsBtn();
+  renderEntriesTable();
+});
+document.getElementById('entriesColsClear').addEventListener('click', ()=>{
+  document.querySelectorAll('#entriesColsList input').forEach(c=>c.checked=false);
+  entriesSelectedColumns = new Set();
+  updateEntriesColsBtn();
+  renderEntriesTable();
+});
+document.getElementById('entriesColsDefault').addEventListener('click', ()=>{
+  const defaults = new Set((DEFAULT_ENTRY_COLUMNS && DEFAULT_ENTRY_COLUMNS.length) ? DEFAULT_ENTRY_COLUMNS : ALL_HEADERS);
+  document.querySelectorAll('#entriesColsList input').forEach(c=>{ c.checked = defaults.has(c.value); });
+  entriesSelectedColumns = defaults;
+  updateEntriesColsBtn();
+  renderEntriesTable();
+});
+document.getElementById('entriesColsList').addEventListener('change', ()=>{
+  entriesSelectedColumns = new Set(Array.from(document.querySelectorAll('#entriesColsList input:checked')).map(c=>c.value));
+  updateEntriesColsBtn();
+  renderEntriesTable();
+});
+
+function renderEntriesKPIs(rows){
+  const row = document.getElementById('entriesKpiRow');
+  row.innerHTML = '';
+  const totalExpense = rows.reduce((a,b)=>a+(b.subtotal||0),0);
+  const totalBudget = rows.reduce((a,b)=>a+(b.budget||0),0);
+  const items = [
+    {label:'Entries in View', value: fmtNum(rows.length)},
+    {label:'Total Expense', value: fmtCr(totalExpense)},
+    {label:'Total Budget', value: fmtCr(totalBudget)},
+    {label:'Total Entries (all)', value: fmtNum(ROWS.length)},
+  ];
+  items.forEach(it=>{
+    const div = document.createElement('div'); div.className='kpi';
+    div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    row.appendChild(div);
+  });
+}
+
+function renderEntriesTableHead(){
+  const thead = document.getElementById('entriesTableHead');
+  const cols = ENTRY_COLUMN_OPTIONS.filter(c => entriesSelectedColumns.has(c));
+  thead.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
+  return cols;
+}
+
+function renderEntriesTable(){
+  const cols = renderEntriesTableHead();
+  const tbody = document.querySelector('#entriesTable tbody');
+  tbody.innerHTML = '';
+  const term = entriesSearchTerm.trim().toLowerCase();
+  const searchFields = ['projectCode','client','expenseType','sheetName','month','entity','projectType'];
+  const rows = getFilteredRows().filter(p=>{
+    if(!term) return true;
+    if (searchFields.some(field => String(p[field] ?? '').toLowerCase().includes(term))) return true;
+    if (p.allColumns) {
+      return Object.values(p.allColumns).some(v => String(v ?? '').toLowerCase().includes(term));
+    }
+    return false;
+  });
+  rows.forEach(p=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = cols.map(c => `<td>${entryColValue(p,c)}</td>`).join('');
+    tbody.appendChild(tr);
+  });
+  document.getElementById('entriesTableTag').textContent = rows.length + ' of ' + ROWS.length + ' entries';
+  renderEntriesKPIs(rows);
+}
+
+function renderEntriesTab(){
+  renderEntriesTable();
+}
+
+document.getElementById('entriesSearch').addEventListener('input', e=>{
+  entriesSearchTerm = e.target.value;
+  renderEntriesTable();
+});
+
+// ---------------- Theme system ----------------
+const THEMES = {
+  dark:    { name:'Dark (Default)',  bg:'#0b1220', panel:'#121b2e', panel2:'#17233a', border:'#223252', text:'#e7ecf5', muted:'#8ea0c2', gold:'#d9a441', teal:'#33b8a8', coral:'#e0665f', violet:'#8b7ee8', grid:'rgba(255,255,255,0.06)', swatch:'#0b1220' },
+  midnight:{ name:'Midnight Blue',   bg:'#03060d', panel:'#0b1424', panel2:'#101d34', border:'#1c2b47', text:'#dbe6ff', muted:'#6f83ab', gold:'#e0b45a', teal:'#3fd0c0', coral:'#ef6f68', violet:'#9d8ff2', grid:'rgba(255,255,255,0.05)', swatch:'#0b1a33' },
+  forest:  { name:'Forest Green',    bg:'#0b120e', panel:'#121f18', panel2:'#182a21', border:'#25402f', text:'#e6f2ea', muted:'#83a692', gold:'#d9a441', teal:'#4fbf8b', coral:'#e0665f', violet:'#8b7ee8', grid:'rgba(255,255,255,0.06)', swatch:'#163523' },
+  sunset:  { name:'Sunset Warm',     bg:'#1a1210', panel:'#241a17', panel2:'#2e211c', border:'#4a332a', text:'#f5e9e2', muted:'#c79b83', gold:'#e0a441', teal:'#4fb6ac', coral:'#e0665f', violet:'#c98be0', grid:'rgba(255,255,255,0.06)', swatch:'#7a3b23' },
+  light:   { name:'Light',           bg:'#f4f6fb', panel:'#ffffff', panel2:'#eef1f8', border:'#d7deea', text:'#1b2434', muted:'#5b6b85', gold:'#b9791f', teal:'#128a7d', coral:'#c23f38', violet:'#6a5acd', grid:'rgba(0,0,0,0.07)', swatch:'#f4f6fb' },
+};
+const THEME_ORDER = ['dark','midnight','forest','sunset','light'];
+const THEME_STORAGE_KEY = 'expenseDashboardTheme';
+let currentDatalabelColor = THEMES.dark.text;
+
+function applyTheme(name, skipRerender){
+  const t = THEMES[name] || THEMES.dark;
+  const root = document.documentElement.style;
+  root.setProperty('--bg', t.bg);
+  root.setProperty('--panel', t.panel);
+  root.setProperty('--panel-2', t.panel2);
+  root.setProperty('--border', t.border);
+  root.setProperty('--text', t.text);
+  root.setProperty('--muted', t.muted);
+  root.setProperty('--gold', t.gold);
+  root.setProperty('--teal', t.teal);
+  root.setProperty('--coral', t.coral);
+  root.setProperty('--violet', t.violet);
+  root.setProperty('--grid', t.grid);
+
+  Chart.defaults.color = t.muted;
+  Chart.defaults.borderColor = t.grid;
+  currentDatalabelColor = t.text;
+
+  const dot = document.getElementById('themeDot');
+  const label = document.getElementById('themeBtnLabel');
+  if (dot) { dot.style.background = t.gold; dot.style.boxShadow = '0 0 5px ' + t.gold; }
+  if (label) label.textContent = t.name;
+
+  document.querySelectorAll('.theme-option').forEach(el=>{
+    el.classList.toggle('selected', el.dataset.theme === name);
+  });
+
+  try { localStorage.setItem(THEME_STORAGE_KEY, name); } catch(e) {}
+
+  if (!skipRerender){
+    const active = document.querySelector('.tabpage.active');
+    renderTab(active ? active.id : 'tab-overview');
+  }
+}
+
+function buildThemePanel(){
+  const panel = document.getElementById('themePanel');
+  panel.innerHTML = '';
+  THEME_ORDER.forEach(key=>{
+    const t = THEMES[key];
+    const row = document.createElement('div');
+    row.className = 'theme-option';
+    row.dataset.theme = key;
+    row.innerHTML = `<span class="swatch" style="background:${t.swatch}"></span><span>${t.name}</span>`;
+    row.addEventListener('click', ()=>{
+      applyTheme(key);
+      document.getElementById('themePanel').classList.remove('open');
+    });
+    panel.appendChild(row);
+  });
+}
+
+document.getElementById('themeBtn').addEventListener('click', (e)=>{
+  e.stopPropagation();
+  document.querySelectorAll('.ms-panel.open').forEach(p=>p.classList.remove('open'));
+  document.getElementById('themePanel').classList.toggle('open');
+});
+document.getElementById('themePanel').addEventListener('click', e=>e.stopPropagation());
+
+buildThemePanel();
+let savedTheme = 'dark';
+try { savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'dark'; } catch(e) {}
+applyTheme(savedTheme, true);
+
+buildFilterBar();
+buildEntriesColsPanel();
+document.getElementById('periodLabel').textContent = '__PERIOD_LABEL__';
+renderAll();
+</script>
+</body>
+</html>
