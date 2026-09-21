@@ -1,3 +1,4 @@
+
 """
 build_data.py
 --------------
@@ -22,9 +23,7 @@ from pathlib import Path
 from urllib.parse import quote
 import pandas as pd
 
-# NOTE: "Expense Head" add kiya gaya hai — ye sheet ka actual category column hai
-# (values jaise "Interior Work", "Electrical Items", "Furniture" etc.)
-TEXT_COLS = ["Financial Year", "Quarter", "Month", "Sheet Name", "Project Code", "Expense Type", "Expense Head"]
+TEXT_COLS = ["Financial Year", "Quarter", "Month", "Sheet Name", "Project Code", "Expense Type"]
 BASE_COLS = TEXT_COLS + ["Budget", "Amount"]
 
 
@@ -57,7 +56,6 @@ def normalize_columns(raw):
         "Expence Type": "Expense Type",
         "Expense type": "Expense Type",
         "Subtotal After Deduction": "Amount",
-        "PO Amount": "Budget",       # PO Amount ko Budget maana ja raha hai
     })
     missing = [c for c in BASE_COLS if c not in df.columns]
     if missing:
@@ -91,18 +89,10 @@ def clean_data(raw):
     parts = df["Project Code"].str.split("/", expand=True).reindex(columns=range(5))
     df["Client"] = parts[0]
     df["Location"] = parts[1]
+    df["Category"] = parts[3]
     df["Entity"] = parts[4]
-    for c in ["Client", "Location", "Entity"]:
+    for c in ["Client", "Location", "Category", "Entity"]:
         df[c] = df[c].fillna("").astype(str).str.strip().replace("", "Unknown")
-
-    # ---- Category: "Expense Head" column se (sheet ka asli category field) ----
-    # agar "Expense Head" khaali hai to project-code ke 4th segment par fallback
-    df["Category"] = df["Expense Head"].fillna("").astype(str).str.strip()
-    code_category = parts[3].fillna("").astype(str).str.strip()
-    blank_cat = df["Category"].eq("")
-    df.loc[blank_cat, "Category"] = code_category[blank_cat]
-    issues["Category filled from project code (Expense Head was blank)"] = int(blank_cat.sum())
-    df["Category"] = df["Category"].replace("", "Unknown")
 
     start_raw = parts[2].fillna("").astype(str).str.strip()
     df["Start Date"] = pd.to_datetime(start_raw, format="%d%m%y", errors="coerce")
