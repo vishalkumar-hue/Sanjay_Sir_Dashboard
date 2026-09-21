@@ -8,14 +8,17 @@ Do tarah se chalta hai:
 
 1) Streamlit app (Streamlit Cloud par deploy):
        streamlit run build_data.py
-   -> Sheet link paste karo ya CSV upload karo, JSON / updated HTML download karo.
+   -> Google Sheet ke "Compile Report" tab se seedha data leta hai
+      (koi CSV upload nahi). JSON / updated dashboard HTML download karo.
 
-2) Command line (pehle jaisa):
-       python3 build_data.py <csv_path_or_url> <output_json_path>
+2) Command line:
+       python3 build_data.py <csv_path_or_sheet_link> <output_json_path> ["Tab Name"]
 """
 import sys
 import json
 import re
+from pathlib import Path
+from urllib.parse import quote
 import pandas as pd
 
 TEXT_COLS = ["Financial Year", "Quarter", "Month", "Sheet Name", "Project Code", "Expense Type"]
@@ -125,6 +128,20 @@ def to_sheet_csv_url(s):
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
 
+def sheet_csv_url(link, tab=None, gid=None):
+    """Google Sheet link + tab ka naam (ya gid) -> CSV URL."""
+    link = link.strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", link)
+    if not m:
+        return link
+    sid = m.group(1)
+    if gid:
+        return f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
+    if tab:
+        return f"https://docs.google.com/spreadsheets/d/{sid}/gviz/tq?tqx=out:csv&sheet={quote(tab)}"
+    return to_sheet_csv_url(link)
+
+
 def build_payload(df, issues):
     rows = []
     for _, r in df.iterrows():
@@ -172,11 +189,12 @@ def inject_into_html(html, payload):
 def run_cli():
     if len(sys.argv) < 3:
         print(__doc__)
-        print("Usage: python3 build_data.py <csv_path_or_url> <output_json_path>")
+        print("Usage: python3 build_data.py <csv_path_or_sheet_link> <output_json_path> [\"Tab Name\"]")
         sys.exit(1)
     src = sys.argv[1]
     out_path = sys.argv[2]
-    url = to_sheet_csv_url(src) if "docs.google.com" in src else src
+    tab = sys.argv[3] if len(sys.argv) > 3 else None
+    url = sheet_csv_url(src, tab) if "docs.google.com" in src else src
     raw = pd.read_csv(url, dtype=str)
     df, issues = clean_data(raw)
     payload = build_payload(df, issues)
@@ -186,64 +204,74 @@ def run_cli():
 
 
 # ---------------------------------------------------------------- Streamlit mode
+DEFAULT_SHEET_LINK = "https://docs.google.com/spreadsheets/d/1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw/edit?gid=0#gid=0"
+DEFAULT_TAB = "Compile Report"
+TEMPLATE_FILE = "dashboard_template.html"   # repo me build_data.py ke saath rakho
+
+
 def run_streamlit():
     import streamlit as st
 
     st.set_page_config(page_title="Payment Report - Build Data", layout="wide")
     st.title("Payment Report - Build Data")
-    st.caption("Google Sheet / CSV se dashboard ka data JSON (aur updated HTML) banayein.")
 
-    src_mode = st.radio("Data source", ["Google Sheet / CSV link", "CSV file upload"], horizontal=True)
-    raw = None
+    with st.sidebar:
+        st.header("Google Sheet")
+        link = st.text_input("Sheet link", DEFAULT_SHEET_LINK)
+        tab = st.text_input("Tab name", DEFAULT_TAB)
+        gid = st.text_input("Tab gid (optional - tab name se na chale to)", "")
+        refresh = st.button("Refresh data", type="primary")
 
-    if src_mode == "Google Sheet / CSV link":
-        link = st.text_input("Google Sheet link (anyone-with-link view access) ya CSV URL")
-        if st.button("Build data", type="primary") and link.strip():
-            try:
-                with st.spinner("Sheet padh raha hoon..."):
-                    raw = pd.read_csv(to_sheet_csv_url(link), dtype=str)
-            except Exception as e:
-                st.error(f"Sheet nahi padh paya: {e}\n\nCheck karein ki sheet 'Anyone with the link - Viewer' par shared hai.")
-    else:
-        up = st.file_uploader("CSV file", type=["csv"])
-        if up is not None and st.button("Build data", type="primary"):
-            raw = pd.read_csv(up, dtype=str)
+    url = sheet_csv_url(link, tab.strip() or None, gid.strip() or None)
 
-    template = st.file_uploader("(Optional) Dashboard HTML template - data usme embed karne ke liye",
-                                type=["html", "htm"])
-
-    if raw is not None:
+    if refresh or st.session_state.get("url") != url:
         try:
-            df, issues = clean_data(raw)
-            payload = build_payload(df, issues)
+            with st.spinner("Sheet se data la raha hoon..."):
+                raw = pd.read_csv(url, dtype=str)
+                df, issues = clean_data(raw)
+                payload = build_payload(df, issues)
         except Exception as e:
-            st.error(f"Data process karte waqt error: {e}")
+            st.error(
+                f"Data nahi la paya: {e}\n\n"
+                "Check karein: (1) sheet 'Anyone with the link - Viewer' par shared hai, "
+                "(2) tab ka naam bilkul sahi hai, (3) tab me ye columns hain: "
+                + ", ".join(BASE_COLS)
+            )
             return
         st.session_state["payload"] = payload
-        st.session_state["template"] = template.getvalue().decode("utf-8") if template else None
+        st.session_state["url"] = url
 
-    payload = st.session_state.get("payload")
-    if payload:
-        st.success(f"{len(payload['rows']):,} rows ready - {payload['loadedAt']}")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Data quality")
-            st.table(pd.DataFrame(list(payload["issues"].items()), columns=["Check", "Count"]))
-        with c2:
-            st.subheader("Preview")
-            st.dataframe(pd.DataFrame(payload["rows"]).head(50), use_container_width=True)
+    payload = st.session_state["payload"]
+    st.success(f"Tab '{tab}' se {len(payload['rows']):,} rows ready - {payload['loadedAt']}")
 
-        st.download_button("Download JSON", json.dumps(payload),
-                           file_name="payment_data.json", mime="application/json")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Data quality")
+        st.table(pd.DataFrame(list(payload["issues"].items()), columns=["Check", "Count"]))
+    with c2:
+        st.subheader("Preview")
+        st.dataframe(pd.DataFrame(payload["rows"]).head(50), use_container_width=True)
 
-        tpl = st.session_state.get("template")
-        if tpl:
-            try:
-                new_html = inject_into_html(tpl, payload)
-                st.download_button("Download updated dashboard HTML", new_html,
-                                   file_name="payment_dashboard.html", mime="text/html")
-            except Exception as e:
-                st.error(f"HTML update nahi ho paya: {e}")
+    # ---- dashboard HTML (repo se, warna upload)
+    tpl = None
+    tpl_path = Path(__file__).with_name(TEMPLATE_FILE)
+    if tpl_path.exists():
+        tpl = tpl_path.read_text(encoding="utf-8")
+    else:
+        up = st.file_uploader(f"Dashboard HTML template (ya {TEMPLATE_FILE} repo me daal do)",
+                              type=["html", "htm"])
+        if up is not None:
+            tpl = up.getvalue().decode("utf-8")
+
+    if tpl:
+        try:
+            st.download_button("Download updated dashboard HTML", inject_into_html(tpl, payload),
+                               file_name="payment_dashboard.html", mime="text/html", type="primary")
+        except Exception as e:
+            st.error(f"HTML update nahi ho paya: {e}")
+
+    st.download_button("Download JSON", json.dumps(payload),
+                       file_name="payment_data.json", mime="application/json")
 
 
 # ---------------------------------------------------------------- entry point
