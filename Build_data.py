@@ -1,26 +1,28 @@
 """
 build_data.py
 --------------
-Google Sheet (Payment Report) ka CSV padhta hai, Streamlit app jaisi hi
-cleaning karta hai, aur ek JSON file banata hai jo HTML dashboard me
-seedha embed ho jaayegi (jaise Margin Dashboard me ROWS embed hai).
+Google Sheet (Payment Report) ka CSV padhta hai, cleaning karta hai, aur
+ek JSON banata hai jo HTML dashboard me embed hoti hai.
 
-Usage:
-    python3 build_data.py <csv_path_or_url> <output_json_path>
+Do tarah se chalta hai:
 
-Agar Google Sheet ka link diya jaaye to script khud CSV export URL bana
-lega (agar pehle se export?format=csv URL nahi hai).
+1) Streamlit app (Streamlit Cloud par deploy):
+       streamlit run build_data.py
+   -> Sheet link paste karo ya CSV upload karo, JSON / updated HTML download karo.
+
+2) Command line (pehle jaisa):
+       python3 build_data.py <csv_path_or_url> <output_json_path>
 """
 import sys
 import json
 import re
-import numpy as np
 import pandas as pd
 
 TEXT_COLS = ["Financial Year", "Quarter", "Month", "Sheet Name", "Project Code", "Expense Type"]
 BASE_COLS = TEXT_COLS + ["Budget", "Amount"]
 
 
+# ---------------------------------------------------------------- cleaning
 def to_number(series):
     s = series.fillna("").astype(str).str.strip()
     negative = s.str.match(r"^\(.*\)$")
@@ -110,7 +112,10 @@ def clean_data(raw):
     return df.reset_index(drop=True), issues
 
 
+# ---------------------------------------------------------------- helpers
 def to_sheet_csv_url(s):
+    """Google Sheet link ko CSV export URL me badalta hai."""
+    s = s.strip()
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", s)
     if not m:
         return s
@@ -120,13 +125,7 @@ def to_sheet_csv_url(s):
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
 
-def main():
-    src = sys.argv[1]
-    out_path = sys.argv[2]
-    url = to_sheet_csv_url(src) if "docs.google.com" in src else src
-    raw = pd.read_csv(url, dtype=str)
-    df, issues = clean_data(raw)
-
+def build_payload(df, issues):
     rows = []
     for _, r in df.iterrows():
         rows.append({
@@ -145,19 +144,119 @@ def main():
             "amount": float(r["Amount"]),
             "startDate": None if pd.isna(r["Start Date"]) else r["Start Date"].strftime("%Y-%m-%d"),
         })
-
     month_order = sorted(df.loc[df["Month Key"] != "Unknown", "Month Key"].unique().tolist())
-
-    payload = {
+    return {
         "rows": rows,
         "monthOrder": month_order,
         "issues": issues,
         "loadedAt": pd.Timestamp.now().strftime("%d %b %Y, %H:%M"),
     }
+
+
+def inject_into_html(html, payload):
+    """Dashboard HTML ke ROWS / MONTH_ORDER / ISSUES / LOADED_AT lines replace karta hai."""
+    def sub_line(text, name, value_js):
+        pat = re.compile(r"^const " + name + r" = .*;[ \t]*$", re.M)
+        if not pat.search(text):
+            raise ValueError(f"HTML me 'const {name} = ...;' line nahi mili")
+        return pat.sub(lambda m: f"const {name} = {value_js};", text, count=1)
+
+    html = sub_line(html, "ROWS", json.dumps(payload["rows"]))
+    html = sub_line(html, "MONTH_ORDER", json.dumps(payload["monthOrder"]))
+    html = sub_line(html, "ISSUES", json.dumps(payload["issues"]))
+    html = sub_line(html, "LOADED_AT", json.dumps(payload["loadedAt"]))
+    return html
+
+
+# ---------------------------------------------------------------- CLI mode
+def run_cli():
+    if len(sys.argv) < 3:
+        print(__doc__)
+        print("Usage: python3 build_data.py <csv_path_or_url> <output_json_path>")
+        sys.exit(1)
+    src = sys.argv[1]
+    out_path = sys.argv[2]
+    url = to_sheet_csv_url(src) if "docs.google.com" in src else src
+    raw = pd.read_csv(url, dtype=str)
+    df, issues = clean_data(raw)
+    payload = build_payload(df, issues)
     with open(out_path, "w") as f:
         json.dump(payload, f)
-    print(f"Wrote {len(rows)} rows to {out_path}")
+    print(f"Wrote {len(payload['rows'])} rows to {out_path}")
+
+
+# ---------------------------------------------------------------- Streamlit mode
+def run_streamlit():
+    import streamlit as st
+
+    st.set_page_config(page_title="Payment Report - Build Data", layout="wide")
+    st.title("Payment Report - Build Data")
+    st.caption("Google Sheet / CSV se dashboard ka data JSON (aur updated HTML) banayein.")
+
+    src_mode = st.radio("Data source", ["Google Sheet / CSV link", "CSV file upload"], horizontal=True)
+    raw = None
+
+    if src_mode == "Google Sheet / CSV link":
+        link = st.text_input("Google Sheet link (anyone-with-link view access) ya CSV URL")
+        if st.button("Build data", type="primary") and link.strip():
+            try:
+                with st.spinner("Sheet padh raha hoon..."):
+                    raw = pd.read_csv(to_sheet_csv_url(link), dtype=str)
+            except Exception as e:
+                st.error(f"Sheet nahi padh paya: {e}\n\nCheck karein ki sheet 'Anyone with the link - Viewer' par shared hai.")
+    else:
+        up = st.file_uploader("CSV file", type=["csv"])
+        if up is not None and st.button("Build data", type="primary"):
+            raw = pd.read_csv(up, dtype=str)
+
+    template = st.file_uploader("(Optional) Dashboard HTML template - data usme embed karne ke liye",
+                                type=["html", "htm"])
+
+    if raw is not None:
+        try:
+            df, issues = clean_data(raw)
+            payload = build_payload(df, issues)
+        except Exception as e:
+            st.error(f"Data process karte waqt error: {e}")
+            return
+        st.session_state["payload"] = payload
+        st.session_state["template"] = template.getvalue().decode("utf-8") if template else None
+
+    payload = st.session_state.get("payload")
+    if payload:
+        st.success(f"{len(payload['rows']):,} rows ready - {payload['loadedAt']}")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Data quality")
+            st.table(pd.DataFrame(list(payload["issues"].items()), columns=["Check", "Count"]))
+        with c2:
+            st.subheader("Preview")
+            st.dataframe(pd.DataFrame(payload["rows"]).head(50), use_container_width=True)
+
+        st.download_button("Download JSON", json.dumps(payload),
+                           file_name="payment_data.json", mime="application/json")
+
+        tpl = st.session_state.get("template")
+        if tpl:
+            try:
+                new_html = inject_into_html(tpl, payload)
+                st.download_button("Download updated dashboard HTML", new_html,
+                                   file_name="payment_dashboard.html", mime="text/html")
+            except Exception as e:
+                st.error(f"HTML update nahi ho paya: {e}")
+
+
+# ---------------------------------------------------------------- entry point
+def _running_in_streamlit():
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
 
 
 if __name__ == "__main__":
-    main()
+    if _running_in_streamlit():
+        run_streamlit()
+    else:
+        run_cli()
