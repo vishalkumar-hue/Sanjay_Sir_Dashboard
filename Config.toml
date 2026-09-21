@@ -1,0 +1,26 @@
+# Light + dark dono themes. App ke top-right ⋮ menu -> Settings -> Theme se badal sakte ho.
+# Default: "Use system setting" (device ka theme follow karta hai).
+
+[theme]
+font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
+baseRadius = "0.5rem"
+showWidgetBorder = true
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+
+[theme.light]
+primaryColor = "#1B5E8C"
+backgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#16212C"
+borderColor = "#DCE2EA"
+dataframeHeaderBackgroundColor = "#EEF2F7"
+chartCategoricalColors = ["#3B82C4", "#F0A03C", "#35B0A0", "#D9614C", "#8E7CC3", "#7FB05B", "#D4739F", "#A8916A"]
+
+[theme.dark]
+primaryColor = "#4A9BDB"
+backgroundColor = "#0E151D"
+secondaryBackgroundColor = "#16212C"
+textColor = "#E3E9F0"
+borderColor = "#273443"
+dataframeHeaderBackgroundColor = "#1D2B3A"
+chartCategoricalColors = ["#3B82C4", "#F0A03C", "#35B0A0", "#D9614C", "#8E7CC3", "#7FB05B", "#D4739F", "#A8916A"]
