@@ -1,17 +1,16 @@
-
 """
 build_data.py
 --------------
-Google Sheet (Payment Report) ka CSV padhta hai, cleaning karta hai, aur
-ek JSON banata hai jo HTML dashboard me embed hoti hai.
+Reads the Google Sheet (Payment Report) CSV, cleans it, and builds a
+JSON payload that gets embedded into the HTML dashboard.
 
-Do tarah se chalta hai:
+Can be run in two ways:
 
-1) Streamlit app (Streamlit Cloud par deploy):
+1) Streamlit app (deployed on Streamlit Cloud):
        streamlit run build_data.py
-   -> Google Sheet ke "Compile Report" tab se seedha data leta hai aur
-      dashboard seedha khol deta hai (koi upload / sidebar nahi).
-      Dashboard ki .html file repo me isi file ke saath honi chahiye.
+   -> Reads data directly from the "Compile Report" tab of the Google
+      Sheet and opens the dashboard directly (no upload / sidebar).
+      The dashboard's .html file must sit alongside this file in the repo.
 
 2) Command line:
        python3 build_data.py <csv_path_or_sheet_link> <output_json_path> ["Tab Name"]
@@ -59,7 +58,7 @@ def normalize_columns(raw):
     })
     missing = [c for c in BASE_COLS if c not in df.columns]
     if missing:
-        raise ValueError("Ye columns nahi mile: " + ", ".join(missing))
+        raise ValueError("Missing columns: " + ", ".join(missing))
     return df[BASE_COLS].copy()
 
 
@@ -119,7 +118,7 @@ def clean_data(raw):
 
 # ---------------------------------------------------------------- helpers
 def to_sheet_csv_url(s):
-    """Google Sheet link ko CSV export URL me badalta hai."""
+    """Converts a Google Sheet link into a CSV export URL."""
     s = s.strip()
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", s)
     if not m:
@@ -131,7 +130,7 @@ def to_sheet_csv_url(s):
 
 
 def sheet_csv_url(link, tab=None, gid=None):
-    """Google Sheet link + tab ka naam (ya gid) -> CSV URL."""
+    """Converts a Google Sheet link + tab name (or gid) -> CSV URL."""
     link = link.strip()
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", link)
     if not m:
@@ -173,11 +172,11 @@ def build_payload(df, issues):
 
 
 def inject_into_html(html, payload):
-    """Dashboard HTML ke ROWS / MONTH_ORDER / ISSUES / LOADED_AT lines replace karta hai."""
+    """Replaces the ROWS / MONTH_ORDER / ISSUES / LOADED_AT lines in the dashboard HTML."""
     def sub_line(text, name, value_js):
         pat = re.compile(r"^const " + name + r" = .*;[ \t]*$", re.M)
         if not pat.search(text):
-            raise ValueError(f"HTML me 'const {name} = ...;' line nahi mili")
+            raise ValueError(f"Could not find 'const {name} = ...;' line in the HTML")
         return pat.sub(lambda m: f"const {name} = {value_js};", text, count=1)
 
     html = sub_line(html, "ROWS", json.dumps(payload["rows"]))
@@ -188,11 +187,12 @@ def inject_into_html(html, payload):
 
 
 # ---------------------------------------------------------------- dashboard tweaks
-# Dashboard HTML ko file me chhue bina, data daalte waqt ye chhote badlaav lagte hain:
-#   1) "Data Quality" tab hata diya
-#   2) har chart me values bina click/hover ke dikhti hain (data labels)
+# These small changes are applied while injecting data, without touching the
+# dashboard HTML file itself:
+#   1) "Data Quality" tab removed
+#   2) every chart shows values without needing to click/hover (data labels)
 DL_JS = r"""
-// ---- data labels: har chart me value bina click kiye dikhe ----
+// ---- data labels: show the value on every chart without clicking ----
 function dlThemeText(){ try { return getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e7ecf5'; } catch(e){ return '#e7ecf5'; } }
 function dlOutsideColor(){ return dlThemeText(); }
 function dlNum(v){ return Number(v).toLocaleString('en-IN', {maximumFractionDigits: (unitKey==='rs' ? 0 : 2)}); }
@@ -267,7 +267,7 @@ def _sub(html, name, pattern, repl, skipped):
 
 
 def apply_dashboard_tweaks(html):
-    """(html, skipped) return karta hai; skipped = jo badlaav lag nahi paye."""
+    """Returns (html, skipped); skipped = the tweaks that could not be applied."""
     skipped = []
     html = _sub(html, "data labels",
                 r"Chart\.defaults\.set\('plugins\.datalabels',\s*\{\s*display:\s*false\s*\}\);",
@@ -312,12 +312,12 @@ def run_cli():
 # ---------------------------------------------------------------- Streamlit mode
 DEFAULT_SHEET_LINK = "https://docs.google.com/spreadsheets/d/1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw/edit?gid=0#gid=0"
 DEFAULT_TAB = "Compile Report"
-TEMPLATE_FILE = "dashboard_template.html"   # optional; na ho to repo ki koi bhi dashboard .html mil jaati hai
-CACHE_SECONDS = 600                         # itni der tak sheet dobara nahi padhta
+TEMPLATE_FILE = "dashboard_template.html"   # optional; if absent, any dashboard .html found in the repo is used
+CACHE_SECONDS = 600                         # sheet is not re-read again within this window
 
 
 def find_template():
-    """Repo me dashboard HTML dhundta hai (jisme 'const ROWS = ' line ho)."""
+    """Looks for the dashboard HTML in the repo (the one containing a 'const ROWS = ' line)."""
     here = Path(__file__).resolve().parent
     preferred = here / TEMPLATE_FILE
     if preferred.exists():
@@ -347,7 +347,7 @@ def run_streamlit():
         unsafe_allow_html=True,
     )
 
-    @st.cache_data(ttl=CACHE_SECONDS, show_spinner="Sheet se data la raha hoon...")
+    @st.cache_data(ttl=CACHE_SECONDS, show_spinner="Fetching data from the sheet...")
     def load_payload(url):
         raw = pd.read_csv(url, dtype=str)
         df, issues = clean_data(raw)
@@ -355,8 +355,9 @@ def run_streamlit():
 
     template = find_template()
     if template is None:
-        st.error("Dashboard ki HTML file repo me nahi mili. Apni dashboard .html file GitHub repo me "
-                 "build_data.py ke saath daal do (ya uska naam dashboard_template.html rakh do).")
+        st.error("Could not find the dashboard's HTML file in the repo. Please add your dashboard "
+                 ".html file to the GitHub repo alongside build_data.py "
+                 "(or name it dashboard_template.html).")
         return
 
     url = sheet_csv_url(DEFAULT_SHEET_LINK, DEFAULT_TAB)
@@ -364,9 +365,9 @@ def run_streamlit():
         payload = load_payload(url)
     except Exception as e:
         st.error(
-            f"Sheet se data nahi la paya: {e}\n\n"
-            "Check karein: sheet 'Anyone with the link - Viewer' par shared ho, tab ka naam "
-            f"'{DEFAULT_TAB}' sahi ho, aur tab me ye columns hon: " + ", ".join(BASE_COLS)
+            f"Could not fetch data from the sheet: {e}\n\n"
+            "Please check: the sheet is shared as 'Anyone with the link - Viewer', the tab name "
+            f"is correctly '{DEFAULT_TAB}', and the tab contains these columns: " + ", ".join(BASE_COLS)
         )
         return
 
@@ -374,12 +375,12 @@ def run_streamlit():
         html = inject_into_html(template, payload)
         html, skipped = apply_dashboard_tweaks(html)
     except Exception as e:
-        st.error(f"Dashboard HTML me data daal nahi paya: {e}")
+        st.error(f"Could not inject data into the dashboard HTML: {e}")
         return
     if skipped:
-        st.warning("Ye badlaav lag nahi paye (HTML alag hai): " + ", ".join(skipped))
+        st.warning("These tweaks could not be applied (HTML differs from expected): " + ", ".join(skipped))
 
-    # naye Streamlit me st.iframe, purane me components.html
+    # st.iframe on newer Streamlit, components.html on older versions
     if hasattr(st, "iframe"):
         st.iframe(html, height=1000)
     else:
