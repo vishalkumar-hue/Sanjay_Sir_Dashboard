@@ -55,6 +55,7 @@ def normalize_columns(raw):
         "Expence Type": "Expense Type",
         "Expense type": "Expense Type",
         "Subtotal After Deduction": "Amount",
+        "PO Amount": "Budget",   # <-- ADDED: PO Amount ko Budget maana ja raha hai
     })
     missing = [c for c in BASE_COLS if c not in df.columns]
     if missing:
