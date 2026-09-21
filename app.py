@@ -1,52 +1,49 @@
 """
-Expense Dashboard - Live Streamlit App
-Fetches live data from the "Compile Report" tab of the Sanjay Jha Report
-Google Sheet, cleans it, derives Client/Entity/Project Type from the
-Project Code, and sends row-level data to the Chart.js HTML/CSS dashboard,
-which does all filtering + aggregation client-side across ALL tabs
-(Overview, Monthly Trend, Expense Type Analysis, Client Analysis,
-Sheet-wise Analysis, Quarter Comparison, Comparison, All Entries).
+Expense Dashboard — Sanjay Jha Report
+Live analysis of the "Compile Report" tab of the Google Sheet.
+
+Built from scratch, directly on the real columns found in the sheet:
+Financial Year | Quarter | Month | Sheet Name | Project Code | Budget |
+Expence Type | Subtotal After Deduction
+
+No separate HTML template file — everything (data load, cleaning,
+analysis, charts, tables) lives in this one file so there's nothing
+extra to keep in sync on GitHub / Streamlit Cloud.
 """
 
-import json
 import re
 import urllib.parse
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
-import streamlit.components.v1 as components
 
 # ----------------------------------------------------------------------
 # CONFIG
 # ----------------------------------------------------------------------
-DEFAULT_SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"
-DEFAULT_SHEET_NAME = "Compile Report"
-TEMPLATE_PATH = Path(__file__).parent / "assets" / "dashboard_template.html"
+SHEET_ID = "1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw"
+SHEET_NAME = "Compile Report"
 
-st.set_page_config(page_title="Expense Dashboard", layout="wide", page_icon="💸", initial_sidebar_state="collapsed")
-st.markdown("""
-<style>
-.stApp{background:#0b1220;}
-[data-testid="collapsedControl"]{display:none;}
-section[data-testid="stSidebar"]{display:none;}
-div.block-container{padding-top:3.5rem;}
-div.stButton > button{
-  background:#17233a; color:#e7ecf5; border:1px solid #223252; border-radius:6px;
-}
-div.stButton > button:hover{border-color:#d9a441; color:#d9a441;}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Expense Dashboard", layout="wide", page_icon="💸")
 
-sheet_id = DEFAULT_SHEET_ID
-sheet_name = DEFAULT_SHEET_NAME
+st.markdown(
+    """
+    <style>
+    .stApp { background:#0b1220; }
+    div[data-testid="stMetric"] {
+        background:#121b2e; border:1px solid #223252; border-radius:10px;
+        padding:12px 16px;
+    }
+    div[data-testid="stMetricLabel"] { color:#8ea0c2; }
+    div[data-testid="stMetricValue"] { color:#e7ecf5; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-_, refresh_col = st.columns([8, 1])
-with refresh_col:
-    if st.button("🔄 Refresh"):
-        st.cache_data.clear()
-        st.rerun()
+st.title("💸 Expense Dashboard")
+st.caption("Live analysis of the Compile Report sheet")
 
 # ----------------------------------------------------------------------
 # DATA LOADING
@@ -56,15 +53,16 @@ def build_csv_url(sheet_id: str, sheet_name: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
 
 
-@st.cache_data(ttl=60, show_spinner="Geting Data From Google Sheet...")
+@st.cache_data(ttl=300, show_spinner="Sheet se data la rahe hain...")
 def load_raw_data(sheet_id: str, sheet_name: str) -> pd.DataFrame:
     url = build_csv_url(sheet_id, sheet_name)
     df = pd.read_csv(url)
-    df.columns = [c.strip() for c in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
     return df
 
 
 def clean_numeric(series: pd.Series) -> pd.Series:
+    """Strip ₹, commas, % and blanks, then convert to float."""
     if series.dtype.kind in "if":
         return series.astype(float)
     cleaned = (
@@ -76,16 +74,17 @@ def clean_numeric(series: pd.Series) -> pd.Series:
 
 
 # ----------------------------------------------------------------------
-# COLUMN RESOLUTION
+# COLUMN RESOLUTION — tolerant to header typos/renames in the sheet
 # ----------------------------------------------------------------------
-def find_col(df: pd.DataFrame, target: str):
+def find_col(df: pd.DataFrame, candidates):
     def normalize(s: str) -> str:
-        return "".join(ch for ch in s.strip().lower() if ch.isalnum())
+        return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
 
-    target_norm = normalize(target)
-    for c in df.columns:
-        if normalize(c) == target_norm:
-            return c
+    for cand in candidates:
+        target = normalize(cand)
+        for c in df.columns:
+            if normalize(c) == target:
+                return c
     return None
 
 
@@ -97,36 +96,30 @@ COLUMN_TARGETS = {
     "ProjectCode": ["Project Code"],
     "Budget": ["Budget"],
     "ExpenseType": ["Expence Type", "Expense Type"],
-    "Subtotal": ["Subtotal After Deduction"],
+    "Subtotal": ["Subtotal After Deduction", "Subtotal"],
 }
 
 
 def resolve_columns(df: pd.DataFrame):
-    resolved = {}
-    for logical, candidates in COLUMN_TARGETS.items():
-        found = None
-        for cand in candidates:
-            found = find_col(df, cand)
-            if found:
-                break
-        resolved[logical] = found
-    return resolved
+    return {logical: find_col(df, cands) for logical, cands in COLUMN_TARGETS.items()}
 
 
 # ----------------------------------------------------------------------
-# JUNK-ROW FILTER
+# JUNK-ROW FILTER — repeated header rows that show up mid-sheet
 # ----------------------------------------------------------------------
 JUNK_MARKERS = {"project code", "nature of expense", "expence type", "expense type", "sheet name"}
 
 
-def is_junk_row(project_code: str, expense_type: str) -> bool:
+def is_junk_row(project_code, expense_type) -> bool:
     pc = str(project_code).strip().lower()
     et = str(expense_type).strip().lower()
     return pc in JUNK_MARKERS or et in JUNK_MARKERS
 
 
 # ----------------------------------------------------------------------
-# PROJECT CODE PARSING -> Client / Entity / Project Type
+# PROJECT CODE PARSING -> Client / Project Type / Entity
+# e.g. "BSEB/PATNA/010924/CENTRE-SETUP/IIPLD"
+#       Client=BSEB, ProjectType=CENTRE-SETUP, Entity=IIPLD
 # ----------------------------------------------------------------------
 def parse_project_code(code: str):
     code = str(code).strip()
@@ -139,132 +132,358 @@ def parse_project_code(code: str):
     return client, project_type, entity
 
 
-def prepare_data(raw: pd.DataFrame):
-    df = raw.copy()
-    cols = resolve_columns(df)
+def month_sort_key(m: str):
+    for fmt in ("%b_%Y", "%b_%y"):
+        try:
+            return datetime.strptime(str(m), fmt)
+        except Exception:
+            continue
+    return datetime.max
+
+
+def fy_quarter_sort_key(fy: str, quarter: str):
+    m = re.search(r"(\d{4})", str(fy))
+    year = int(m.group(1)) if m else 9999
+    qm = re.search(r"(\d)", str(quarter))
+    q = int(qm.group(1)) if qm else 9
+    return year * 10 + q
+
+
+def fmt_inr(v) -> str:
+    if v is None or pd.isna(v):
+        return "-"
+    v = float(v)
+    abs_v = abs(v)
+    if abs_v >= 1e7:
+        return f"₹{v/1e7:.2f} Cr"
+    if abs_v >= 1e5:
+        return f"₹{v/1e5:.2f} L"
+    return f"₹{v:,.0f}"
+
+
+@st.cache_data(ttl=300)
+def prepare_data(sheet_id: str, sheet_name: str):
+    raw = load_raw_data(sheet_id, sheet_name)
+    cols = resolve_columns(raw)
 
     pc_col = cols.get("ProjectCode")
     et_col = cols.get("ExpenseType")
     budget_col = cols.get("Budget")
     subtotal_col = cols.get("Subtotal")
 
+    df = raw.copy()
+
+    # Drop rows missing the two columns everything depends on.
+    if not pc_col or not subtotal_col:
+        return pd.DataFrame(), cols, "Sheet me 'Project Code' ya 'Subtotal After Deduction' column nahi mila."
+
+    # Remove repeated-header junk rows.
     if pc_col and et_col:
         junk_mask = df.apply(lambda r: is_junk_row(r[pc_col], r[et_col]), axis=1)
         df = df[~junk_mask]
 
-    if pc_col:
-        df = df[df[pc_col].astype(str).str.strip().replace({"nan": ""}) != ""]
+    # Drop rows with a blank project code (section gaps in the sheet).
+    df = df[df[pc_col].fillna("").astype(str).str.strip() != ""]
 
+    df[subtotal_col] = clean_numeric(df[subtotal_col])
     if budget_col:
         df[budget_col] = clean_numeric(df[budget_col])
-    if subtotal_col:
-        df[subtotal_col] = clean_numeric(df[subtotal_col])
+    else:
+        df["_Budget"] = 0.0
+        budget_col = "_Budget"
+
+    df = df[df[subtotal_col].notna()]
 
     for logical in ["FY", "Quarter", "Month", "SheetName", "ProjectCode", "ExpenseType"]:
         c = cols.get(logical)
         if c:
-            df[c] = df[c].astype(str).str.strip().replace({"nan": ""})
+            df[c] = df[c].fillna("").astype(str).str.strip().replace({"nan": ""})
 
-    if pc_col:
-        parsed = df[pc_col].apply(parse_project_code)
-        df["_Client"] = parsed.apply(lambda t: t[0])
-        df["_ProjectType"] = parsed.apply(lambda t: t[1])
-        df["_Entity"] = parsed.apply(lambda t: t[2])
+    parsed = df[pc_col].apply(parse_project_code)
+    df["Client"] = parsed.apply(lambda t: t[0])
+    df["ProjectType"] = parsed.apply(lambda t: t[1])
+    df["Entity"] = parsed.apply(lambda t: t[2])
+
+    fy_col, q_col = cols.get("FY"), cols.get("Quarter")
+    if fy_col and q_col:
+        df["FYQuarter"] = df[fy_col] + " " + df[q_col]
     else:
-        df["_Client"] = ""
-        df["_ProjectType"] = ""
-        df["_Entity"] = ""
+        df["FYQuarter"] = ""
 
-    return df, cols
-
-
-def month_sort_key(m: str):
-    for fmt in ("%b_%Y", "%b_%y"):
-        try:
-            return datetime.strptime(m, fmt)
-        except Exception:
-            continue
-    return datetime.max
-
-
-def _series_or_blank(df, cols, logical, length):
-    col = cols.get(logical)
-    if col:
-        return df[col].fillna("").astype(str)
-    return pd.Series([""] * length, index=df.index)
-
-
-def build_rows(df: pd.DataFrame, cols: dict):
-    n = len(df)
-    budget = df[cols["Budget"]] if cols.get("Budget") else pd.Series([0.0] * n, index=df.index)
-    subtotal = df[cols["Subtotal"]] if cols.get("Subtotal") else pd.Series([0.0] * n, index=df.index)
-
-    all_cols_df = df.drop(columns=["_Client", "_ProjectType", "_Entity"], errors="ignore")
-    all_cols_df = all_cols_df.where(all_cols_df.notna(), "")
-    all_columns_records = all_cols_df.to_dict("records")
-
-    out = pd.DataFrame({
-        "fy": _series_or_blank(df, cols, "FY", n),
-        "quarter": _series_or_blank(df, cols, "Quarter", n),
-        "month": _series_or_blank(df, cols, "Month", n),
-        "sheetName": _series_or_blank(df, cols, "SheetName", n),
-        "projectCode": _series_or_blank(df, cols, "ProjectCode", n),
-        "client": df["_Client"],
-        "projectType": df["_ProjectType"],
-        "entity": df["_Entity"],
-        "expenseType": _series_or_blank(df, cols, "ExpenseType", n),
-        "budget": budget.fillna(0),
-        "subtotal": subtotal.fillna(0),
+    df = df.rename(columns={
+        subtotal_col: "Expense",
+        budget_col: "Budget",
+        cols.get("FY") or "FY": "FY",
+        cols.get("Quarter") or "Quarter": "Quarter",
+        cols.get("Month") or "Month": "Month",
+        cols.get("SheetName") or "SheetName": "SheetName",
+        cols.get("ProjectCode") or "ProjectCode": "ProjectCode",
+        cols.get("ExpenseType") or "ExpenseType": "ExpenseType",
     })
-    out["allColumns"] = pd.Series(all_columns_records, index=df.index)
-    return out.to_dict("records")
+
+    keep_cols = ["FY", "Quarter", "Month", "SheetName", "ProjectCode", "Client",
+                 "ProjectType", "Entity", "ExpenseType", "Budget", "Expense", "FYQuarter"]
+    keep_cols = [c for c in keep_cols if c in df.columns]
+    df = df[keep_cols].reset_index(drop=True)
+
+    return df, cols, None
 
 
 # ----------------------------------------------------------------------
-# LOAD + BUILD
+# LOAD
 # ----------------------------------------------------------------------
+top_col1, top_col2 = st.columns([8, 1])
+with top_col2:
+    if st.button("🔄 Refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
 try:
-    raw_df = load_raw_data(sheet_id, sheet_name)
-    prepared_df, resolved_cols = prepare_data(raw_df)
+    df, resolved_cols, err = prepare_data(SHEET_ID, SHEET_NAME)
 except Exception as e:
-    st.error(f"Sheet load nahi ho payi. Sharing settings aur tab name check karo. Error: {e}")
+    st.error(f"Sheet load nahi ho payi. Sharing settings aur tab name check karo.\n\nError: {e}")
     st.stop()
 
-if prepared_df.empty:
+if err:
+    st.error(err)
+    st.stop()
+
+if df.empty:
     st.warning("Sheet se koi valid row nahi mili. Column headers check karo.")
     st.stop()
 
-if not TEMPLATE_PATH.exists():
-    st.error(
-        f"Template file nahi mili: `{TEMPLATE_PATH}`.\n\n"
-        "GitHub repo mein `assets/dashboard_template.html` file exist karti hai ya nahi check karo, "
-        "aur ye ki `ap.py` repo ke root mein hi hai (kisi subfolder mein nahi)."
-    )
-    st.stop()
+# ----------------------------------------------------------------------
+# FILTERS (sidebar)
+# ----------------------------------------------------------------------
+st.sidebar.header("Filters")
 
-rows = build_rows(prepared_df, resolved_cols)
 
-months_present = sorted(
-    {r["month"] for r in rows if r["month"]},
-    key=month_sort_key,
+def multiselect_filter(label, col):
+    if col not in df.columns:
+        return None
+    options = sorted([v for v in df[col].unique() if v])
+    selected = st.sidebar.multiselect(label, options)
+    return selected or None
+
+
+f_fy = multiselect_filter("Financial Year", "FY")
+f_quarter = multiselect_filter("Quarter", "Quarter")
+f_month = multiselect_filter("Month", "Month")
+f_sheet = multiselect_filter("Sheet Name", "SheetName")
+f_client = multiselect_filter("Client", "Client")
+f_expense_type = multiselect_filter("Expense Type", "ExpenseType")
+
+filtered = df.copy()
+for col, sel in [("FY", f_fy), ("Quarter", f_quarter), ("Month", f_month),
+                  ("SheetName", f_sheet), ("Client", f_client), ("ExpenseType", f_expense_type)]:
+    if sel:
+        filtered = filtered[filtered[col].isin(sel)]
+
+if st.sidebar.button("Clear all filters"):
+    st.rerun()
+
+# ----------------------------------------------------------------------
+# KPIs
+# ----------------------------------------------------------------------
+total_expense = filtered["Expense"].sum()
+total_budget = filtered["Budget"].sum() if "Budget" in filtered.columns else 0
+total_entries = len(filtered)
+unique_clients = filtered["Client"].nunique()
+unique_types = filtered["ExpenseType"].nunique() if "ExpenseType" in filtered.columns else 0
+avg_entry = total_expense / total_entries if total_entries else 0
+
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Total Expense", fmt_inr(total_expense))
+k2.metric("Total Budget", fmt_inr(total_budget))
+k3.metric("Total Entries", f"{total_entries:,}")
+k4.metric("Unique Clients", f"{unique_clients:,}")
+k5.metric("Avg / Entry", fmt_inr(avg_entry))
+
+st.divider()
+
+# ----------------------------------------------------------------------
+# TABS
+# ----------------------------------------------------------------------
+tab_overview, tab_monthly, tab_type, tab_client, tab_sheet, tab_quarter, tab_data = st.tabs(
+    ["Overview", "Monthly Trend", "Expense Type", "Clients", "Sheet-wise", "Quarter Comparison", "All Entries"]
 )
-period_label = f"{months_present[0]} – {months_present[-1]}" if months_present else ""
 
-all_headers_list = [c for c in prepared_df.columns if not str(c).startswith("_")]
+CHART_TEMPLATE = "plotly_dark"
+PALETTE = px.colors.qualitative.Set2
 
-_default_logical_order = ["FY", "Quarter", "Month", "SheetName", "ProjectCode", "ExpenseType", "Budget", "Subtotal"]
-default_display_columns = [
-    resolved_cols.get(k) for k in _default_logical_order if resolved_cols.get(k)
-]
+# ---- Overview ----
+with tab_overview:
+    c1, c2 = st.columns(2)
 
-template_html = TEMPLATE_PATH.read_text(encoding="utf-8")
-final_html = (
-    template_html
-    .replace("__ROWS_JSON__", json.dumps(rows, default=str))
-    .replace("__MONTH_ORDER_JSON__", json.dumps(months_present, default=str))
-    .replace("__PERIOD_LABEL__", period_label)
-    .replace("__ALL_HEADERS_JSON__", json.dumps(all_headers_list, default=str))
-    .replace("__DEFAULT_COLUMNS_JSON__", json.dumps(default_display_columns, default=str))
-)
+    with c1:
+        st.subheader("Expense Trend by Month")
+        if "Month" in filtered.columns:
+            monthly = filtered.groupby("Month", as_index=False)["Expense"].sum()
+            monthly["_sort"] = monthly["Month"].apply(month_sort_key)
+            monthly = monthly.sort_values("_sort")
+            fig = px.bar(monthly, x="Month", y="Expense", template=CHART_TEMPLATE,
+                         color_discrete_sequence=PALETTE)
+            fig.update_layout(showlegend=False, xaxis_title="", yaxis_title="Expense (₹)")
+            st.plotly_chart(fig, use_container_width=True)
 
-components.html(final_html, height=3200, scrolling=True)
+    with c2:
+        st.subheader("Expense Type Split")
+        if "ExpenseType" in filtered.columns:
+            by_type = filtered.groupby("ExpenseType", as_index=False)["Expense"].sum()
+            by_type = by_type.sort_values("Expense", ascending=False).head(12)
+            fig = px.pie(by_type, names="ExpenseType", values="Expense", template=CHART_TEMPLATE,
+                         color_discrete_sequence=PALETTE, hole=0.45)
+            st.plotly_chart(fig, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.subheader("Top 10 Clients by Expense")
+        by_client = filtered.groupby("Client", as_index=False)["Expense"].sum()
+        by_client = by_client.sort_values("Expense", ascending=False).head(10)
+        fig = px.bar(by_client, x="Expense", y="Client", orientation="h", template=CHART_TEMPLATE,
+                     color_discrete_sequence=PALETTE)
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False, yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with c4:
+        st.subheader("Source Sheet Split")
+        if "SheetName" in filtered.columns:
+            by_sheet = filtered.groupby("SheetName", as_index=False)["Expense"].sum()
+            by_sheet = by_sheet.sort_values("Expense", ascending=False)
+            fig = px.pie(by_sheet, names="SheetName", values="Expense", template=CHART_TEMPLATE,
+                         color_discrete_sequence=PALETTE, hole=0.45)
+            st.plotly_chart(fig, use_container_width=True)
+
+# ---- Monthly Trend ----
+with tab_monthly:
+    st.subheader("Expense by Month")
+    if "Month" in filtered.columns:
+        monthly = filtered.groupby("Month", as_index=False).agg(Expense=("Expense", "sum"),
+                                                                  Budget=("Budget", "sum"),
+                                                                  Entries=("Expense", "count"))
+        monthly["_sort"] = monthly["Month"].apply(month_sort_key)
+        monthly = monthly.sort_values("_sort").drop(columns="_sort")
+        fig = px.bar(monthly, x="Month", y=["Expense", "Budget"], barmode="group",
+                     template=CHART_TEMPLATE, color_discrete_sequence=PALETTE)
+        fig.update_layout(yaxis_title="₹", xaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+        monthly_display = monthly.copy()
+        monthly_display["Expense"] = monthly_display["Expense"].apply(fmt_inr)
+        monthly_display["Budget"] = monthly_display["Budget"].apply(fmt_inr)
+        st.dataframe(monthly_display, use_container_width=True, hide_index=True)
+
+# ---- Expense Type ----
+with tab_type:
+    st.subheader("Expense by Type")
+    if "ExpenseType" in filtered.columns:
+        by_type = filtered.groupby("ExpenseType", as_index=False).agg(Expense=("Expense", "sum"),
+                                                                        Entries=("Expense", "count"))
+        by_type = by_type.sort_values("Expense", ascending=False)
+        by_type["AvgPerEntry"] = by_type["Expense"] / by_type["Entries"]
+        by_type["% of Total"] = (by_type["Expense"] / by_type["Expense"].sum() * 100).round(1)
+
+        search = st.text_input("Search expense type...", key="search_type")
+        view = by_type[by_type["ExpenseType"].str.contains(search, case=False, na=False)] if search else by_type
+
+        fig = px.bar(view.head(25), x="Expense", y="ExpenseType", orientation="h",
+                     template=CHART_TEMPLATE, color_discrete_sequence=PALETTE)
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False, yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+        display = view.copy()
+        display["Expense"] = display["Expense"].apply(fmt_inr)
+        display["AvgPerEntry"] = display["AvgPerEntry"].apply(fmt_inr)
+        display["% of Total"] = display["% of Total"].astype(str) + "%"
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+# ---- Clients ----
+with tab_client:
+    st.subheader("Client Analysis")
+    by_client = filtered.groupby("Client", as_index=False).agg(Expense=("Expense", "sum"),
+                                                                 Entries=("Expense", "count"))
+    by_client = by_client.sort_values("Expense", ascending=False)
+    by_client["AvgPerEntry"] = by_client["Expense"] / by_client["Entries"]
+
+    max_clients = len(by_client)
+    if max_clients <= 5:
+        top_n = max_clients
+    else:
+        top_n = st.slider("Show top N clients", 5, min(50, max_clients), min(15, max_clients))
+    search_c = st.text_input("Search client...", key="search_client")
+    view = by_client[by_client["Client"].str.contains(search_c, case=False, na=False)] if search_c else by_client
+
+    fig = px.bar(view.head(top_n), x="Expense", y="Client", orientation="h",
+                 template=CHART_TEMPLATE, color_discrete_sequence=PALETTE)
+    fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False, yaxis_title="")
+    st.plotly_chart(fig, use_container_width=True)
+
+    display = view.copy()
+    display["Expense"] = display["Expense"].apply(fmt_inr)
+    display["AvgPerEntry"] = display["AvgPerEntry"].apply(fmt_inr)
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+# ---- Sheet-wise ----
+with tab_sheet:
+    st.subheader("Sheet-wise Analysis")
+    if "SheetName" in filtered.columns:
+        by_sheet = filtered.groupby("SheetName", as_index=False).agg(Expense=("Expense", "sum"),
+                                                                       Entries=("Expense", "count"))
+        by_sheet = by_sheet.sort_values("Expense", ascending=False)
+        by_sheet["AvgPerEntry"] = by_sheet["Expense"] / by_sheet["Entries"]
+
+        fig = px.bar(by_sheet, x="Expense", y="SheetName", orientation="h",
+                     template=CHART_TEMPLATE, color_discrete_sequence=PALETTE)
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False, yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+        display = by_sheet.copy()
+        display["Expense"] = display["Expense"].apply(fmt_inr)
+        display["AvgPerEntry"] = display["AvgPerEntry"].apply(fmt_inr)
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+# ---- Quarter Comparison ----
+with tab_quarter:
+    st.subheader("Expense & Budget by Quarter")
+    if "FYQuarter" in filtered.columns:
+        by_q = filtered.groupby(["FY", "Quarter", "FYQuarter"], as_index=False).agg(
+            Expense=("Expense", "sum"), Budget=("Budget", "sum"), Entries=("Expense", "count")
+        )
+        by_q = by_q[by_q["FYQuarter"].str.strip() != ""]
+        by_q["_sort"] = by_q.apply(lambda r: fy_quarter_sort_key(r["FY"], r["Quarter"]), axis=1)
+        by_q = by_q.sort_values("_sort").drop(columns="_sort")
+
+        fig = px.bar(by_q, x="FYQuarter", y=["Expense", "Budget"], barmode="group",
+                     template=CHART_TEMPLATE, color_discrete_sequence=PALETTE)
+        fig.update_layout(yaxis_title="₹", xaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+        by_q["QoQ Expense Δ%"] = by_q["Expense"].pct_change().mul(100).round(1)
+        display = by_q[["FYQuarter", "Expense", "Budget", "Entries", "QoQ Expense Δ%"]].copy()
+        display["Expense"] = display["Expense"].apply(fmt_inr)
+        display["Budget"] = display["Budget"].apply(fmt_inr)
+        display["QoQ Expense Δ%"] = display["QoQ Expense Δ%"].apply(
+            lambda v: "-" if pd.isna(v) else (f"+{v}%" if v >= 0 else f"{v}%")
+        )
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+# ---- All Entries ----
+with tab_data:
+    st.subheader("All Entries")
+    search_all = st.text_input("Search project code, client, expense type...", key="search_all")
+    view = filtered.copy()
+    if search_all:
+        term = search_all.lower()
+        mask = view.apply(lambda r: term in str(r["ProjectCode"]).lower()
+                           or term in str(r["Client"]).lower()
+                           or term in str(r.get("ExpenseType", "")).lower(), axis=1)
+        view = view[mask]
+
+    st.caption(f"{len(view):,} of {len(df):,} entries")
+    display = view.copy()
+    display["Expense"] = display["Expense"].apply(fmt_inr)
+    display["Budget"] = display["Budget"].apply(fmt_inr)
+    st.dataframe(display, use_container_width=True, hide_index=True, height=500)
+
+    csv = view.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download filtered data as CSV", csv, "filtered_expenses.csv", "text/csv")
