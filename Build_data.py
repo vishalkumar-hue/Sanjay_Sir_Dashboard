@@ -286,8 +286,7 @@ def apply_dashboard_tweaks(html):
     html = _sub(html, "remove Data Quality tab",
                 r"[ \t]*<button class=\"tabbtn\" data-tab=\"dq\">Data Quality</button>[ \t]*\n?",
                 "", skipped)
-    html = _sub(html, "zero-amount KPI text",
-                r"details: Data quality tab", "rows with zero amount", skipped)
+
     return html, skipped
 
 
