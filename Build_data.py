@@ -8,8 +8,9 @@ Do tarah se chalta hai:
 
 1) Streamlit app (Streamlit Cloud par deploy):
        streamlit run build_data.py
-   -> Google Sheet ke "Compile Report" tab se seedha data leta hai
-      (koi CSV upload nahi). JSON / updated dashboard HTML download karo.
+   -> Google Sheet ke "Compile Report" tab se seedha data leta hai aur
+      dashboard seedha khol deta hai (koi upload / sidebar nahi).
+      Dashboard ki .html file repo me isi file ke saath honi chahiye.
 
 2) Command line:
        python3 build_data.py <csv_path_or_sheet_link> <output_json_path> ["Tab Name"]
@@ -206,72 +207,76 @@ def run_cli():
 # ---------------------------------------------------------------- Streamlit mode
 DEFAULT_SHEET_LINK = "https://docs.google.com/spreadsheets/d/1P8awjtc-dwxCce1WJLDixljqL37yqCxnOe5QZ75_gIw/edit?gid=0#gid=0"
 DEFAULT_TAB = "Compile Report"
-TEMPLATE_FILE = "dashboard_template.html"   # repo me build_data.py ke saath rakho
+TEMPLATE_FILE = "dashboard_template.html"   # optional; na ho to repo ki koi bhi dashboard .html mil jaati hai
+CACHE_SECONDS = 600                         # itni der tak sheet dobara nahi padhta
+
+
+def find_template():
+    """Repo me dashboard HTML dhundta hai (jisme 'const ROWS = ' line ho)."""
+    here = Path(__file__).resolve().parent
+    preferred = here / TEMPLATE_FILE
+    if preferred.exists():
+        return preferred.read_text(encoding="utf-8")
+    for p in sorted(here.rglob("*.htm*")):
+        try:
+            t = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if re.search(r"^const ROWS = ", t, re.M):
+            return t
+    return None
 
 
 def run_streamlit():
     import streamlit as st
 
-    st.set_page_config(page_title="Payment Report - Build Data", layout="wide")
-    st.title("Payment Report - Build Data")
+    st.set_page_config(page_title="Payment Report Dashboard", layout="wide",
+                       initial_sidebar_state="collapsed")
+    st.markdown(
+        """<style>
+        [data-testid="stSidebar"], [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"], footer {display:none !important;}
+        .block-container {padding:2.5rem 0 0 0 !important; max-width:100% !important;}
+        iframe {height:calc(100vh - 3rem) !important;}
+        </style>""",
+        unsafe_allow_html=True,
+    )
 
-    with st.sidebar:
-        st.header("Google Sheet")
-        link = st.text_input("Sheet link", DEFAULT_SHEET_LINK)
-        tab = st.text_input("Tab name", DEFAULT_TAB)
-        gid = st.text_input("Tab gid (optional - tab name se na chale to)", "")
-        refresh = st.button("Refresh data", type="primary")
+    @st.cache_data(ttl=CACHE_SECONDS, show_spinner="Sheet se data la raha hoon...")
+    def load_payload(url):
+        raw = pd.read_csv(url, dtype=str)
+        df, issues = clean_data(raw)
+        return build_payload(df, issues)
 
-    url = sheet_csv_url(link, tab.strip() or None, gid.strip() or None)
+    template = find_template()
+    if template is None:
+        st.error("Dashboard ki HTML file repo me nahi mili. Apni dashboard .html file GitHub repo me "
+                 "build_data.py ke saath daal do (ya uska naam dashboard_template.html rakh do).")
+        return
 
-    if refresh or st.session_state.get("url") != url:
-        try:
-            with st.spinner("Sheet se data la raha hoon..."):
-                raw = pd.read_csv(url, dtype=str)
-                df, issues = clean_data(raw)
-                payload = build_payload(df, issues)
-        except Exception as e:
-            st.error(
-                f"Data nahi la paya: {e}\n\n"
-                "Check karein: (1) sheet 'Anyone with the link - Viewer' par shared hai, "
-                "(2) tab ka naam bilkul sahi hai, (3) tab me ye columns hain: "
-                + ", ".join(BASE_COLS)
-            )
-            return
-        st.session_state["payload"] = payload
-        st.session_state["url"] = url
+    url = sheet_csv_url(DEFAULT_SHEET_LINK, DEFAULT_TAB)
+    try:
+        payload = load_payload(url)
+    except Exception as e:
+        st.error(
+            f"Sheet se data nahi la paya: {e}\n\n"
+            "Check karein: sheet 'Anyone with the link - Viewer' par shared ho, tab ka naam "
+            f"'{DEFAULT_TAB}' sahi ho, aur tab me ye columns hon: " + ", ".join(BASE_COLS)
+        )
+        return
 
-    payload = st.session_state["payload"]
-    st.success(f"Tab '{tab}' se {len(payload['rows']):,} rows ready - {payload['loadedAt']}")
+    try:
+        html = inject_into_html(template, payload)
+    except Exception as e:
+        st.error(f"Dashboard HTML me data daal nahi paya: {e}")
+        return
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Data quality")
-        st.table(pd.DataFrame(list(payload["issues"].items()), columns=["Check", "Count"]))
-    with c2:
-        st.subheader("Preview")
-        st.dataframe(pd.DataFrame(payload["rows"]).head(50), use_container_width=True)
-
-    # ---- dashboard HTML (repo se, warna upload)
-    tpl = None
-    tpl_path = Path(__file__).with_name(TEMPLATE_FILE)
-    if tpl_path.exists():
-        tpl = tpl_path.read_text(encoding="utf-8")
+    # naye Streamlit me st.iframe, purane me components.html
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=1000)
     else:
-        up = st.file_uploader(f"Dashboard HTML template (ya {TEMPLATE_FILE} repo me daal do)",
-                              type=["html", "htm"])
-        if up is not None:
-            tpl = up.getvalue().decode("utf-8")
-
-    if tpl:
-        try:
-            st.download_button("Download updated dashboard HTML", inject_into_html(tpl, payload),
-                               file_name="payment_dashboard.html", mime="text/html", type="primary")
-        except Exception as e:
-            st.error(f"HTML update nahi ho paya: {e}")
-
-    st.download_button("Download JSON", json.dumps(payload),
-                       file_name="payment_data.json", mime="application/json")
+        import streamlit.components.v1 as components
+        components.html(html, height=1000, scrolling=True)
 
 
 # ---------------------------------------------------------------- entry point
