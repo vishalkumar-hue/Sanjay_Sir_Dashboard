@@ -186,6 +186,110 @@ def inject_into_html(html, payload):
     return html
 
 
+# ---------------------------------------------------------------- dashboard tweaks
+# Dashboard HTML ko file me chhue bina, data daalte waqt ye chhote badlaav lagte hain:
+#   1) "Data Quality" tab hata diya
+#   2) har chart me values bina click/hover ke dikhti hain (data labels)
+DL_JS = r"""
+// ---- data labels: har chart me value bina click kiye dikhe ----
+function dlThemeText(){ try { return getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e7ecf5'; } catch(e){ return '#e7ecf5'; } }
+function dlOutsideColor(){ return dlThemeText(); }
+function dlNum(v){ return Number(v).toLocaleString('en-IN', {maximumFractionDigits: (unitKey==='rs' ? 0 : 2)}); }
+function dlType(ctx){ return ctx.dataset.type || ctx.chart.config.type; }
+function dlStacked(ch){ const sc = ch.options.scales || {}; return !!((sc.x && sc.x.stacked) || (sc.y && sc.y.stacked)); }
+function dlStackMax(ch){
+  if (ch._dlStackMax !== undefined) return ch._dlStackMax;
+  const bars = ch.data.datasets.filter(d => (d.type || ch.config.type) === 'bar');
+  const n = (ch.data.labels || []).length;
+  let m = 0;
+  for (let i = 0; i < n; i++){
+    let t = 0;
+    bars.forEach(d => { const v = +d.data[i]; if (isFinite(v) && v > 0) t += v; });
+    if (t > m) m = t;
+  }
+  ch._dlStackMax = m;
+  return m;
+}
+function dlInside(ctx){
+  const t = ctx.chart.config.type;
+  if (t === 'doughnut' || t === 'pie') return true;
+  return dlType(ctx) === 'bar' && dlStacked(ctx.chart);
+}
+function dlDisplay(ctx){
+  const ch = ctx.chart, cfg = ch.config.type;
+  if (cfg === 'bubble') return false;
+  const v = ctx.dataset.data[ctx.dataIndex];
+  if (typeof v !== 'number' || !isFinite(v) || v === 0) return false;
+  if (cfg === 'doughnut' || cfg === 'pie') return true;
+  if (dlType(ctx) === 'bar' && dlStacked(ch)) return v >= 0.05 * dlStackMax(ch);
+  return true;
+}
+function totalLine(datasets, n){
+  const data = [];
+  for (let i = 0; i < n; i++){ data.push(datasets.reduce((a, d) => a + (+d.data[i] || 0), 0)); }
+  return { type:'line', label:'Total', data, showLine:false, pointRadius:0, pointHoverRadius:0, borderWidth:0,
+    backgroundColor:'transparent', borderColor:'transparent',
+    datalabels:{ display: ctx => ctx.dataset.data[ctx.dataIndex] > 0, anchor:'end', align:'top', offset:2,
+                 color: () => dlThemeText(), font:{ size:11, weight:'700' } } };
+}
+Chart.defaults.set('layout', { padding:{ top:22, right:30, left:4, bottom:4 } });
+Chart.defaults.set('plugins.legend.labels', { filter: item => item.text !== 'Total' });
+Chart.defaults.set('plugins.datalabels', {
+  display: dlDisplay,
+  clamp: true,
+  clip: false,
+  offset: 2,
+  font: { size:10, weight:'600' },
+  color: ctx => dlInside(ctx) ? '#fff' : dlThemeText(),
+  anchor: ctx => dlInside(ctx) ? 'center' : 'end',
+  align: ctx => dlInside(ctx) ? 'center' : (dlType(ctx) === 'line' ? 'top' : 'end'),
+  rotation: ctx => {
+    const ch = ctx.chart;
+    if (dlType(ctx) !== 'bar' || dlStacked(ch) || ch.options.indexAxis === 'y') return 0;
+    const bars = ch.data.datasets.filter(d => (d.type || ch.config.type) === 'bar').length;
+    return (ch.data.labels.length * bars) > 16 ? -90 : 0;
+  },
+  formatter: (v, ctx) => {
+    if (v === null || v === undefined || typeof v === 'object') return '';
+    if (ctx.dataset.yAxisID === 'y1') return Math.round(v) + '%';
+    return dlNum(v);
+  }
+});
+"""
+
+
+def _sub(html, name, pattern, repl, skipped):
+    new, n = re.subn(pattern, (lambda m: repl) if isinstance(repl, str) else repl, html)
+    if n == 0:
+        skipped.append(name)
+    return new
+
+
+def apply_dashboard_tweaks(html):
+    """(html, skipped) return karta hai; skipped = jo badlaav lag nahi paye."""
+    skipped = []
+    html = _sub(html, "data labels",
+                r"Chart\.defaults\.set\('plugins\.datalabels',\s*\{\s*display:\s*false\s*\}\);",
+                DL_JS, skipped)
+    html = _sub(html, "label colours",
+                r"color:'#fff',\s*anchor:'end',\s*align:'right'",
+                "color:dlOutsideColor(), anchor:'end', align:'right'", skipped)
+    html = _sub(html, "trend totals",
+                r"const ctx = document\.getElementById\('trendChart'\);",
+                "datasets.push(totalLine(datasets, labels.length));\n  const ctx = document.getElementById('trendChart');",
+                skipped)
+    html = _sub(html, "entity totals",
+                r"charts\.entity = new Chart\(document\.getElementById\('entityChart'\), \{",
+                "datasets.push(totalLine(datasets, entities.length));\n  charts.entity = new Chart(document.getElementById('entityChart'), {",
+                skipped)
+    html = _sub(html, "remove Data Quality tab",
+                r"[ \t]*<button class=\"tabbtn\" data-tab=\"dq\">Data Quality</button>[ \t]*\n?",
+                "", skipped)
+    html = _sub(html, "zero-amount KPI text",
+                r"details: Data quality tab", "rows with zero amount", skipped)
+    return html, skipped
+
+
 # ---------------------------------------------------------------- CLI mode
 def run_cli():
     if len(sys.argv) < 3:
@@ -267,9 +371,12 @@ def run_streamlit():
 
     try:
         html = inject_into_html(template, payload)
+        html, skipped = apply_dashboard_tweaks(html)
     except Exception as e:
         st.error(f"Dashboard HTML me data daal nahi paya: {e}")
         return
+    if skipped:
+        st.warning("Ye badlaav lag nahi paye (HTML alag hai): " + ", ".join(skipped))
 
     # naye Streamlit me st.iframe, purane me components.html
     if hasattr(st, "iframe"):
