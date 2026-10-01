@@ -403,6 +403,21 @@
 
   <div id="tab-revenue" class="tabpage">
 
+  <div class="card" style="margin-bottom:16px;">
+    <div class="search-row cmp-controls" style="margin-bottom:0;">
+      <div class="cmp-field">
+        <label for="revScope">Scope</label>
+        <select id="revScope">
+          <option value="mapped">Revenue-mapped projects only (recommended)</option>
+          <option value="all">All projects (incl. projects with no revenue)</option>
+        </select>
+      </div>
+      <div class="sub" style="max-width:560px; align-self:flex-end; color:var(--muted); font-size:12px;">
+        Exam-center / Infra-setup projects have no revenue in the sheet, so including them inflates the expense %. Their expense is shown separately in the last KPI.
+      </div>
+    </div>
+  </div>
+
   <div class="kpis" id="revKpiRow"></div>
 
   <div class="grid">
@@ -417,10 +432,15 @@
   </div>
 
   <div class="card">
+    <h3>Top 10 Projects: Expense vs Revenue <span class="tag">revenue-mapped projects, by expense</span></h3>
+    <div class="chart-box tall"><canvas id="revTopChart"></canvas></div>
+  </div>
+
+  <div class="card">
     <h3>Client-wise Expense vs Revenue <span class="tag" id="revTableTag">clients</span></h3>
     <div class="scroll-table">
     <table id="revTable">
-      <thead><tr><th>Client</th><th class="num">Revenue</th><th class="num">Expense</th><th class="num">Expense % of Rev</th><th class="num">Margin</th></tr></thead>
+      <thead><tr><th>Client</th><th class="num">Projects</th><th class="num">Revenue</th><th class="num">Expense</th><th class="num">Expense % of Rev</th><th class="num">Margin</th></tr></thead>
       <tbody></tbody>
     </table>
     </div>
@@ -1296,64 +1316,66 @@ function renderQuarterTab(){
 }
 
 // ---------------- Revenue vs Expense tab ----------------
-// 'max' = revenue counted once per Project Code (safe if the sheet repeats revenue on every row of a project)
-// 'sum' = add revenue from every row (use this if revenue is split across rows of a project)
+// Revenue is repeated on every row of a project (same project appears in several source sheets),
+// so revenue is counted ONCE per Project Code. 'max' = once per project, 'sum' = add all rows.
 const REVENUE_MODE = 'max';
+let revScope = 'mapped';   // 'mapped' = only projects that have revenue, 'all' = every project
 
-function revenueOf(rows){
-  if (REVENUE_MODE === 'sum') return rows.reduce((a,r)=>a+(r.revenue||0),0);
+function projectAgg(rows){
   const m = new Map();
   rows.forEach(r=>{
-    const v = r.revenue || 0;
-    if (!m.has(r.projectCode) || v > m.get(r.projectCode)) m.set(r.projectCode, v);
+    const k = r.projectCode;
+    if (!m.has(k)) m.set(k, {key:k, client:r.client || '(blank)', expense:0, revenue:0});
+    const p = m.get(k);
+    p.expense += (r.subtotal || 0);
+    p.revenue = (REVENUE_MODE === 'sum') ? p.revenue + (r.revenue || 0) : Math.max(p.revenue, r.revenue || 0);
   });
-  let t = 0; m.forEach(v => t += v);
-  return t;
+  return Array.from(m.values());
 }
+const sumOf = (arr, f) => arr.reduce((a,x)=>a+f(x), 0);
 
-function revByClient(rows){
-  const g = new Map();
-  rows.forEach(r=>{
-    const k = r.client || '(blank)';
-    if (!g.has(k)) g.set(k, []);
-    g.get(k).push(r);
-  });
-  return Array.from(g, ([key, rs])=>{
-    const expense = rs.reduce((a,r)=>a+(r.subtotal||0),0);
-    const revenue = revenueOf(rs);
-    return {key, expense, revenue, pct: revenue ? expense/revenue*100 : null, margin: revenue-expense};
-  });
-}
+document.getElementById('revScope').addEventListener('change', e=>{
+  revScope = e.target.value;
+  renderRevenueTab();
+});
 
 function renderRevenueTab(){
   const rows = getFilteredRows();
-  const expense = rows.reduce((a,r)=>a+(r.subtotal||0),0);
-  const revenue = revenueOf(rows);
+  const projects = projectAgg(rows);
+  const mapped = projects.filter(p => p.revenue > 0);
+  const unmapped = projects.filter(p => !(p.revenue > 0));
+  const scoped = revScope === 'mapped' ? mapped : projects;
+
+  const expense = sumOf(scoped, p=>p.expense);
+  const revenue = sumOf(scoped, p=>p.revenue);
   const pct = revenue ? expense/revenue*100 : 0;
   const margin = revenue - expense;
+  const unmappedExp = sumOf(unmapped, p=>p.expense);
+  const totalExp = sumOf(projects, p=>p.expense);
 
   // KPIs
   const kpi = document.getElementById('revKpiRow');
   kpi.innerHTML = '';
   [
     {label:'Total Revenue', value: fmtCr(revenue)},
-    {label:'Total Expense', value: fmtCr(expense)},
+    {label:'Expense (in scope)', value: fmtCr(expense)},
     {label:'Expense % of Revenue', value: revenue ? pct.toFixed(1)+'%' : '-'},
     {label:'Margin (Revenue - Expense)', value: fmtCr(margin)},
+    {label:'Expense, no revenue mapped', value: fmtCr(unmappedExp)},
   ].forEach(it=>{
     const div = document.createElement('div'); div.className = 'kpi';
     div.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
     kpi.appendChild(div);
   });
 
-  // Pie chart: expense share of total revenue
+  // Pie: expense share of revenue
   destroy('revPie');
   const over = expense > revenue;
   const labels = over ? ['Expense covered by Revenue','Expense above Revenue'] : ['Expense','Remaining Revenue (Margin)'];
   const data = over ? [revenue, expense-revenue] : [expense, margin];
   const pieTotal = data.reduce((a,b)=>a+b,0);
   document.getElementById('revPieTag').textContent = revenue
-    ? (over ? 'expense is ' + pct.toFixed(1) + '% of revenue (over revenue)' : 'expense = ' + pct.toFixed(1) + '% of revenue')
+    ? ('expense = ' + pct.toFixed(1) + '% of revenue' + (over ? ' (over revenue)' : ''))
     : 'no revenue in current filter';
   charts.revPie = new Chart(document.getElementById('revPieChart'), {
     type:'pie',
@@ -1369,32 +1391,61 @@ function renderRevenueTab(){
     }
   });
 
+  // Top 10 projects (revenue-mapped): expense vs revenue
+  destroy('revTop');
+  const top = [...mapped].sort((a,b)=>b.expense-a.expense).slice(0,10);
+  charts.revTop = new Chart(document.getElementById('revTopChart'), {
+    type:'bar',
+    data:{
+      labels: top.map(p=>p.key.length>34 ? p.key.slice(0,32)+'…' : p.key),
+      datasets:[
+        {label:'Expense (₹ L)', data: top.map(p=>+(p.expense/1e5).toFixed(1)), backgroundColor:'rgba(224,102,95,0.7)', borderRadius:4},
+        {label:'Revenue (₹ L)', data: top.map(p=>+(p.revenue/1e5).toFixed(1)), backgroundColor:'rgba(51,184,168,0.65)', borderRadius:4}
+      ]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'bottom'},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:9, weight:'600'}, anchor:'end', align:'right', formatter:(v)=> fmtNum(v) }
+      },
+      scales:{x:{title:{display:true, text:'₹ Lakh'}}}
+    }
+  });
+
   // Client table
-  const clients = revByClient(rows).sort((a,b)=>b.expense-a.expense);
+  const g = new Map();
+  scoped.forEach(p=>{
+    if (!g.has(p.client)) g.set(p.client, []);
+    g.get(p.client).push(p);
+  });
+  const clients = Array.from(g, ([key, ps])=>{
+    const e = sumOf(ps, p=>p.expense), r = sumOf(ps, p=>p.revenue);
+    return {key, n: ps.length, expense:e, revenue:r, pct: r ? e/r*100 : null, margin: r-e};
+  }).sort((a,b)=>b.expense-a.expense);
   const tbody = document.querySelector('#revTable tbody');
   tbody.innerHTML = '';
   clients.forEach(c=>{
     const tr = document.createElement('tr');
-    const pctHtml = c.pct===null ? '-' : `<span class="${c.pct<=100?'up':'down'}">${c.pct.toFixed(1)}%</span>`;
-    tr.innerHTML = `<td>${c.key}</td><td class="num">${fmtCr(c.revenue)}</td><td class="num">${fmtCr(c.expense)}</td><td class="num">${pctHtml}</td><td class="num">${fmtCr(c.margin)}</td>`;
+    const pctHtml = c.pct===null ? '<span style="color:var(--muted)">no revenue</span>' : `<span class="${c.pct<=100?'up':'down'}">${c.pct.toFixed(1)}%</span>`;
+    tr.innerHTML = `<td>${c.key}</td><td class="num">${fmtNum(c.n)}</td><td class="num">${c.revenue ? fmtCr(c.revenue) : '-'}</td><td class="num">${fmtCr(c.expense)}</td><td class="num">${pctHtml}</td><td class="num">${c.revenue ? fmtCr(c.margin) : '-'}</td>`;
     tbody.appendChild(tr);
   });
-  document.getElementById('revTableTag').textContent = clients.length + ' clients';
+  document.getElementById('revTableTag').textContent = clients.length + ' clients, ' + scoped.length + ' projects';
 
   // Final report
-  const noRev = clients.filter(c=>!c.revenue && c.expense>0);
-  const noRevExp = noRev.reduce((a,c)=>a+c.expense,0);
-  const loss = clients.filter(c=>c.revenue && c.expense>c.revenue);
+  const losers = mapped.filter(p=>p.expense > p.revenue).sort((a,b)=>(b.expense-b.revenue)-(a.expense-a.revenue));
   const types = [...aggregateBy(rows,'expenseType')].sort((a,b)=>b.Expense-a.Expense);
   const months = [...aggregateBy(rows,'month')].sort((a,b)=>b.Expense-a.Expense);
-  const top3 = clients.slice(0,3).map(c=>`${c.key} (${fmtCr(c.expense)}${c.pct===null?'':', '+c.pct.toFixed(1)+'% of its revenue'})`).join('; ');
+  const topPct = [...mapped].filter(p=>p.expense>0).sort((a,b)=>b.expense/b.revenue - a.expense/a.revenue).slice(0,3)
+    .map(p=>`${p.key} (${(p.expense/p.revenue*100).toFixed(0)}%)`).join('; ');
   const li = [];
-  li.push(`<b>Overall:</b> Revenue ${fmtCr(revenue)}, Expense ${fmtCr(expense)} → expense is <b>${revenue ? pct.toFixed(1)+'%' : 'n/a'}</b> of revenue, margin ${fmtCr(margin)}.`);
-  if (top3) li.push(`<b>Top 3 clients by expense:</b> ${top3}.`);
-  if (types.length) li.push(`<b>Biggest expense type:</b> ${types[0].key} (${fmtCr(types[0].Expense)}, ${expense ? Math.round(types[0].Expense/expense*100) : 0}% of expense).`);
+  li.push(`<b>Overall (${revScope==='mapped' ? 'revenue-mapped projects' : 'all projects'}):</b> Revenue ${fmtCr(revenue)}, Expense ${fmtCr(expense)} → expense is <b>${revenue ? pct.toFixed(1)+'%' : 'n/a'}</b> of revenue, margin ${fmtCr(margin)}.`);
+  li.push(`<b>Revenue mapped:</b> ${mapped.length} of ${projects.length} projects. The other ${unmapped.length} projects have ${fmtCr(unmappedExp)} expense (${totalExp ? (unmappedExp/totalExp*100).toFixed(1) : 0}% of all expense) with no revenue in the sheet.`);
+  if (topPct) li.push(`<b>Highest expense-to-revenue projects:</b> ${topPct}.`);
+  li.push(`<b>Projects spending more than their revenue:</b> ${losers.length}${losers.length ? ' (worst: ' + losers[0].key + ', over by ' + fmtCr(losers[0].expense-losers[0].revenue) + ')' : ''}.`);
+  if (types.length) li.push(`<b>Biggest expense type:</b> ${types[0].key} (${fmtCr(types[0].Expense)}).`);
   if (months.length) li.push(`<b>Peak expense month:</b> ${months[0].key} (${fmtCr(months[0].Expense)}).`);
-  li.push(`<b>Clients spending more than their revenue:</b> ${loss.length}.`);
-  li.push(`<b>Expense on clients with zero revenue:</b> ${fmtCr(noRevExp)} across ${noRev.length} clients${expense ? ' (' + (noRevExp/expense*100).toFixed(1) + '% of total expense)' : ''}.`);
   document.getElementById('revReport').innerHTML = '<ul style="margin:0; padding-left:18px;">' + li.map(x=>'<li>'+x+'</li>').join('') + '</ul>';
 }
 
