@@ -49,6 +49,30 @@ def quarter_of(d):
     return f"Q{((d.month - 4) % 12) // 3 + 1}"
 
 
+
+def expense_group(v):
+    """Maps ~60 messy expense-type labels to a small set of readable groups."""
+    t = str(v).strip().lower()
+    if not t:
+        return "Not Specified"
+    rules = [
+        ("Food & Catering", ["food", "catering", "lunch", "snack", "beverage"]),
+        ("Internet & Broadband", ["internet", "broadband"]),
+        ("Manpower & Labour", ["manpower", "labour", "labor", "waiter", "serving", "helping"]),
+        ("Purchase - Stock", ["stock", "inventory"]),
+        ("Purchase - Consumables", ["consumable"]),
+        ("Purchase - Project (Local/Central)", ["purchase"]),
+        ("Service (Fixed/Variable/Technical)", ["service"]),
+        ("Fit-out, Furniture & Panels", ["panel", "table", "carpet", "plant", "pvc", "partition",
+                                          "wooden", "ply", "acrylic", "decorative"]),
+        ("Equipment (TV/UPS/Fridge)", ["tv", "ups", "refrig"]),
+    ]
+    for name, keys in rules:
+        if any(k in t for k in keys):
+            return name
+    return "Others"
+
+
 def normalize_columns(raw):
     df = raw.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -91,6 +115,15 @@ def clean_data(raw):
     issues["Truncated project codes fixed ('...')"] = int(df["Project Code"].str.contains(trunc_pat, regex=True).sum())
     df["Project Code"] = df["Project Code"].str.replace(trunc_pat, "", regex=True).str.strip()
 
+    # normalise project-code variants (case, spaces, trailing '.', VOIP vs VO-IP) so one project = one code
+    df["Project Code"] = (df["Project Code"].str.upper()
+                          .str.replace(r"\s+", "", regex=True)
+                          .str.rstrip(".")
+                          .str.replace("/VOIP/", "/VO-IP/", regex=False))
+
+    df["Expense Type Original"] = df["Expense Type"]
+    df["Expense Type"] = df["Expense Type"].apply(expense_group)
+
     parts = df["Project Code"].str.split("/", expand=True).reindex(columns=range(5))
     df["Client"] = parts[0]
     df["Location"] = parts[1]
@@ -98,6 +131,7 @@ def clean_data(raw):
     df["Entity"] = parts[4]
     for c in ["Client", "Location", "Category", "Entity"]:
         df[c] = df[c].fillna("").astype(str).str.strip().replace("", "Unknown")
+    df["Client"] = df["Client"].str.replace(r"^RAILTEL.*$", "RAILTEL", regex=True)   # RAILTEL-UP / -DELHI / -HARYANA -> RAILTEL
 
     start_raw = parts[2].fillna("").astype(str).str.strip()
     df["Start Date"] = pd.to_datetime(start_raw, format="%d%m%y", errors="coerce")
@@ -181,6 +215,7 @@ def build_payload(df, issues):
                 "Category": r["Category"],
                 "Entity": r["Entity"],
                 "Expense Type": r["Expense Type"],
+                "Expense Type (Original)": r["Expense Type Original"],
                 "Budget": float(r["Budget"]),
                 "Expense": float(r["Amount"]),
                 "Revenue": float(r["Revenue"]),
