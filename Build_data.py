@@ -10,7 +10,8 @@ Can be run in two ways:
        streamlit run build_data.py
    -> Reads data directly from the "Compile Report" tab of the Google
       Sheet and opens the dashboard directly (no upload / sidebar).
-      The dashboard's .html file must sit alongside this file in the repo.
+      The dashboard's .html file must sit alongside this file in the repo
+      (name it dashboard_template.html).
 
 2) Command line:
        python3 build_data.py <csv_path_or_sheet_link> <output_json_path> ["Tab Name"]
@@ -55,11 +56,15 @@ def normalize_columns(raw):
         "Expence Type": "Expense Type",
         "Expense type": "Expense Type",
         "Subtotal After Deduction": "Amount",
+        "Overall Revenew": "Revenue",
+        "Overall Revenue": "Revenue",
     })
     missing = [c for c in BASE_COLS if c not in df.columns]
     if missing:
         raise ValueError("Missing columns: " + ", ".join(missing))
-    return df[BASE_COLS].copy()
+    if "Revenue" not in df.columns:
+        df["Revenue"] = 0
+    return df[BASE_COLS + ["Revenue"]].copy()
 
 
 def clean_data(raw):
@@ -80,6 +85,7 @@ def clean_data(raw):
     issues["Non-numeric amount (treated as 0)"] = int(df["Amount"].isna().sum())
     df["Amount"] = df["Amount"].fillna(0.0)
     df["Budget"] = df["Budget"].fillna(0.0)
+    df["Revenue"] = to_number(df["Revenue"]).fillna(0.0)
 
     trunc_pat = r"(?:\.{2,}|…)\s*$"
     issues["Truncated project codes fixed ('...')"] = int(df["Project Code"].str.contains(trunc_pat, regex=True).sum())
@@ -111,6 +117,7 @@ def clean_data(raw):
     df["Month Key"] = df["Month Date"].dt.strftime("%Y-%m").fillna("Unknown")
 
     issues["Rows with a budget value"] = int((df["Budget"] != 0).sum())
+    issues["Rows with a revenue value"] = int((df["Revenue"] != 0).sum())
     issues["Zero-amount rows"] = int((df["Amount"] == 0).sum())
     issues["Exact duplicate rows"] = int(df.duplicated().sum())
     return df.reset_index(drop=True), issues
@@ -146,148 +153,65 @@ def sheet_csv_url(link, tab=None, gid=None):
 def build_payload(df, issues):
     rows = []
     for _, r in df.iterrows():
+        start = None if pd.isna(r["Start Date"]) else r["Start Date"].strftime("%Y-%m-%d")
         rows.append({
             "sheetName": r["Sheet Name"],
-            "financialYear": r["Financial Year"],
+            "fy": r["Financial Year"],
             "quarter": r["Quarter"],
             "month": r["Month"],
             "monthKey": r["Month Key"],
             "projectCode": r["Project Code"],
             "client": r["Client"],
             "location": r["Location"],
-            "category": r["Category"],
+            "projectType": r["Category"],
             "entity": r["Entity"],
             "expenseType": r["Expense Type"],
             "budget": float(r["Budget"]),
-            "amount": float(r["Amount"]),
-            "startDate": None if pd.isna(r["Start Date"]) else r["Start Date"].strftime("%Y-%m-%d"),
+            "subtotal": float(r["Amount"]),
+            "revenue": float(r["Revenue"]),
+            "startDate": start,
+            "allColumns": {
+                "Financial Year": r["Financial Year"],
+                "Quarter": r["Quarter"],
+                "Month": r["Month"],
+                "Sheet Name": r["Sheet Name"],
+                "Project Code": r["Project Code"],
+                "Client": r["Client"],
+                "Location": r["Location"],
+                "Category": r["Category"],
+                "Entity": r["Entity"],
+                "Expense Type": r["Expense Type"],
+                "Budget": float(r["Budget"]),
+                "Expense": float(r["Amount"]),
+                "Revenue": float(r["Revenue"]),
+            },
         })
-    month_order = sorted(df.loc[df["Month Key"] != "Unknown", "Month Key"].unique().tolist())
+    month_order = (df.loc[df["Month Key"] != "Unknown", ["Month", "Month Key"]]
+                     .drop_duplicates().sort_values("Month Key")["Month"].tolist())
     return {
         "rows": rows,
         "monthOrder": month_order,
+        "allHeaders": list(rows[0]["allColumns"].keys()) if rows else [],
         "issues": issues,
         "loadedAt": pd.Timestamp.now().strftime("%d %b %Y, %H:%M"),
     }
 
 
 def inject_into_html(html, payload):
-    """Replaces the ROWS / MONTH_ORDER / ISSUES / LOADED_AT lines in the dashboard HTML."""
-    def sub_line(text, name, value_js):
-        pat = re.compile(r"^const " + name + r" = .*;[ \t]*$", re.M)
-        if not pat.search(text):
-            raise ValueError(f"Could not find 'const {name} = ...;' line in the HTML")
-        return pat.sub(lambda m: f"const {name} = {value_js};", text, count=1)
-
-    html = sub_line(html, "ROWS", json.dumps(payload["rows"]))
-    html = sub_line(html, "MONTH_ORDER", json.dumps(payload["monthOrder"]))
-    html = sub_line(html, "ISSUES", json.dumps(payload["issues"]))
-    html = sub_line(html, "LOADED_AT", json.dumps(payload["loadedAt"]))
+    """Replaces the __PLACEHOLDER__ tokens in the dashboard HTML."""
+    heads = payload["allHeaders"]
+    reps = {
+        "__ROWS_JSON__": json.dumps(payload["rows"]),
+        "__MONTH_ORDER_JSON__": json.dumps(payload["monthOrder"]),
+        "__ALL_HEADERS_JSON__": json.dumps(heads),
+        "__DEFAULT_COLUMNS_JSON__": json.dumps(heads),
+        "__PERIOD_LABEL__": "Loaded " + payload["loadedAt"],
+    }
+    for k, v in reps.items():
+        if k not in html:
+            raise ValueError(f"Placeholder {k} not found in the HTML")
+        html = html.replace(k, v)
     return html
-
-
-# ---------------------------------------------------------------- dashboard tweaks
-# These small changes are applied while injecting data, without touching the
-# dashboard HTML file itself:
-#   1) "Data Quality" tab removed
-#   2) every chart shows values without needing to click/hover (data labels)
-DL_JS = r"""
-// ---- data labels: show the value on every chart without clicking ----
-function dlThemeText(){ try { return getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e7ecf5'; } catch(e){ return '#e7ecf5'; } }
-function dlOutsideColor(){ return dlThemeText(); }
-function dlNum(v){ return Number(v).toLocaleString('en-IN', {maximumFractionDigits: (unitKey==='rs' ? 0 : 2)}); }
-function dlType(ctx){ return ctx.dataset.type || ctx.chart.config.type; }
-function dlStacked(ch){ const sc = ch.options.scales || {}; return !!((sc.x && sc.x.stacked) || (sc.y && sc.y.stacked)); }
-function dlStackMax(ch){
-  if (ch._dlStackMax !== undefined) return ch._dlStackMax;
-  const bars = ch.data.datasets.filter(d => (d.type || ch.config.type) === 'bar');
-  const n = (ch.data.labels || []).length;
-  let m = 0;
-  for (let i = 0; i < n; i++){
-    let t = 0;
-    bars.forEach(d => { const v = +d.data[i]; if (isFinite(v) && v > 0) t += v; });
-    if (t > m) m = t;
-  }
-  ch._dlStackMax = m;
-  return m;
-}
-function dlInside(ctx){
-  const t = ctx.chart.config.type;
-  if (t === 'doughnut' || t === 'pie') return true;
-  return dlType(ctx) === 'bar' && dlStacked(ctx.chart);
-}
-function dlDisplay(ctx){
-  const ch = ctx.chart, cfg = ch.config.type;
-  if (cfg === 'bubble') return false;
-  const v = ctx.dataset.data[ctx.dataIndex];
-  if (typeof v !== 'number' || !isFinite(v) || v === 0) return false;
-  if (cfg === 'doughnut' || cfg === 'pie') return true;
-  if (dlType(ctx) === 'bar' && dlStacked(ch)) return v >= 0.05 * dlStackMax(ch);
-  return true;
-}
-function totalLine(datasets, n){
-  const data = [];
-  for (let i = 0; i < n; i++){ data.push(datasets.reduce((a, d) => a + (+d.data[i] || 0), 0)); }
-  return { type:'line', label:'Total', data, showLine:false, pointRadius:0, pointHoverRadius:0, borderWidth:0,
-    backgroundColor:'transparent', borderColor:'transparent',
-    datalabels:{ display: ctx => ctx.dataset.data[ctx.dataIndex] > 0, anchor:'end', align:'top', offset:2,
-                 color: () => dlThemeText(), font:{ size:11, weight:'700' } } };
-}
-Chart.defaults.set('layout', { padding:{ top:22, right:30, left:4, bottom:4 } });
-Chart.defaults.set('plugins.legend.labels', { filter: item => item.text !== 'Total' });
-Chart.defaults.set('plugins.datalabels', {
-  display: dlDisplay,
-  clamp: true,
-  clip: false,
-  offset: 2,
-  font: { size:10, weight:'600' },
-  color: ctx => dlInside(ctx) ? '#fff' : dlThemeText(),
-  anchor: ctx => dlInside(ctx) ? 'center' : 'end',
-  align: ctx => dlInside(ctx) ? 'center' : (dlType(ctx) === 'line' ? 'top' : 'end'),
-  rotation: ctx => {
-    const ch = ctx.chart;
-    if (dlType(ctx) !== 'bar' || dlStacked(ch) || ch.options.indexAxis === 'y') return 0;
-    const bars = ch.data.datasets.filter(d => (d.type || ch.config.type) === 'bar').length;
-    return (ch.data.labels.length * bars) > 16 ? -90 : 0;
-  },
-  formatter: (v, ctx) => {
-    if (v === null || v === undefined || typeof v === 'object') return '';
-    if (ctx.dataset.yAxisID === 'y1') return Math.round(v) + '%';
-    return dlNum(v);
-  }
-});
-"""
-
-
-def _sub(html, name, pattern, repl, skipped):
-    new, n = re.subn(pattern, (lambda m: repl) if isinstance(repl, str) else repl, html)
-    if n == 0:
-        skipped.append(name)
-    return new
-
-
-def apply_dashboard_tweaks(html):
-    """Returns (html, skipped); skipped = the tweaks that could not be applied."""
-    skipped = []
-    html = _sub(html, "data labels",
-                r"Chart\.defaults\.set\('plugins\.datalabels',\s*\{\s*display:\s*false\s*\}\);",
-                DL_JS, skipped)
-    html = _sub(html, "label colours",
-                r"color:'#fff',\s*anchor:'end',\s*align:'right'",
-                "color:dlOutsideColor(), anchor:'end', align:'right'", skipped)
-    html = _sub(html, "trend totals",
-                r"const ctx = document\.getElementById\('trendChart'\);",
-                "datasets.push(totalLine(datasets, labels.length));\n  const ctx = document.getElementById('trendChart');",
-                skipped)
-    html = _sub(html, "entity totals",
-                r"charts\.entity = new Chart\(document\.getElementById\('entityChart'\), \{",
-                "datasets.push(totalLine(datasets, entities.length));\n  charts.entity = new Chart(document.getElementById('entityChart'), {",
-                skipped)
-    html = _sub(html, "remove Data Quality tab",
-                r"[ \t]*<button class=\"tabbtn\" data-tab=\"dq\">Data Quality</button>[ \t]*\n?",
-                "", skipped)
-
-    return html, skipped
 
 
 # ---------------------------------------------------------------- CLI mode
@@ -316,7 +240,7 @@ CACHE_SECONDS = 600                         # sheet is not re-read again within 
 
 
 def find_template():
-    """Looks for the dashboard HTML in the repo (the one containing a 'const ROWS = ' line)."""
+    """Looks for the dashboard HTML in the repo (the one containing a '__ROWS_JSON__' placeholder)."""
     here = Path(__file__).resolve().parent
     preferred = here / TEMPLATE_FILE
     if preferred.exists():
@@ -326,7 +250,7 @@ def find_template():
             t = p.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        if re.search(r"^const ROWS = ", t, re.M):
+        if "__ROWS_JSON__" in t:
             return t
     return None
 
@@ -372,12 +296,9 @@ def run_streamlit():
 
     try:
         html = inject_into_html(template, payload)
-        html, skipped = apply_dashboard_tweaks(html)
     except Exception as e:
         st.error(f"Could not inject data into the dashboard HTML: {e}")
         return
-    if skipped:
-        st.warning("These tweaks could not be applied (HTML differs from expected): " + ", ".join(skipped))
 
     # st.iframe on newer Streamlit, components.html on older versions
     if hasattr(st, "iframe"):
