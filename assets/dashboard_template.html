@@ -228,6 +228,7 @@
     <button class="tabbtn" data-tab="sheets">Sheet-wise</button>
     <button class="tabbtn" data-tab="quartercomp">Quarter Comparison</button>
     <button class="tabbtn" data-tab="revenue">Revenue vs Expense</button>
+    <button class="tabbtn" data-tab="budget">Budget vs Actual</button>
     <button class="tabbtn" data-tab="comparison">Comparison</button>
     <button class="tabbtn" data-tab="entries">All Entries</button>
   </div>
@@ -285,7 +286,7 @@
   <div class="kpis" id="monthlyKpiRow"></div>
 
   <div class="card">
-    <h3>Expense by Month <span class="tag">monthly trend</span></h3>
+    <h3>Expense by Month <span class="tag">monthly trend (months with no entries shown as 0)</span></h3>
     <div class="chart-box tall"><canvas id="monthlyChart"></canvas></div>
   </div>
 
@@ -385,7 +386,7 @@
   <div class="kpis" id="quarterKpiRow"></div>
 
   <div class="card">
-    <h3>Expense &amp; Budget by Quarter <span class="tag">quarter-on-quarter</span></h3>
+    <h3>Expense by Quarter <span class="tag">quarter-on-quarter</span></h3>
     <div class="chart-box tall"><canvas id="quarterChart"></canvas></div>
   </div>
 
@@ -431,9 +432,14 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" style="margin-bottom:16px;">
     <h3>Top 10 Projects: Expense vs Revenue <span class="tag">revenue-mapped projects, by expense</span></h3>
     <div class="chart-box tall"><canvas id="revTopChart"></canvas></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <h3>Service-line wise: Expense vs Revenue <span class="tag">label shows expense % of revenue</span></h3>
+    <div class="chart-box tall"><canvas id="revTypeChart"></canvas></div>
   </div>
 
   <div class="card">
@@ -441,6 +447,27 @@
     <div class="scroll-table">
     <table id="revTable">
       <thead><tr><th>Client</th><th class="num">Projects</th><th class="num">Revenue</th><th class="num">Expense</th><th class="num">Expense % of Rev</th><th class="num">Margin</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </div>
+
+  </div>
+
+  <div id="tab-budget" class="tabpage">
+
+  <div class="kpis" id="budKpiRow"></div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <h3>Top 12 Budgeted Projects: Budget vs Actual <span class="tag" id="budTag"></span></h3>
+    <div class="chart-box tall"><canvas id="budChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Budget Utilisation by Project <span class="tag">over-budget first</span></h3>
+    <div class="scroll-table">
+    <table id="budTable">
+      <thead><tr><th>Project</th><th class="num">Budget</th><th class="num">Expense</th><th class="num">Variance</th><th class="num">Used %</th></tr></thead>
       <tbody></tbody>
     </table>
     </div>
@@ -461,6 +488,8 @@
           <option value="client">Client</option>
           <option value="expenseType">Expense Type</option>
           <option value="sheetName">Sheet Name</option>
+          <option value="projectType">Project Type (Service line)</option>
+          <option value="entity">Entity</option>
         </select>
       </div>
       <div class="cmp-field multiselect" style="min-width:260px;">
@@ -533,7 +562,7 @@
 
 <script>
 // ROWS = row-level data coming from Python (one object per sheet row, already cleaned).
-// MONTH_ORDER = chronological list of month labels, used to sort month-based charts/filters.
+// MONTH_ORDER = chronological list of month labels (continuous, no gaps), used to sort month-based charts/filters.
 const ROWS = __ROWS_JSON__;
 const MONTH_ORDER = __MONTH_ORDER_JSON__;
 // ALL_HEADERS = every column header (row.allColumns keys),
@@ -593,6 +622,37 @@ function fyQuarterSortKey(q){
   return parseInt(m[1],10)*10 + parseInt(m[2],10);
 }
 
+// ---------------- Partial period helpers ----------------
+// The current (still running) month / quarter has incomplete data, so its
+// MoM / QoQ change is not shown and it is tagged "partial".
+function isCurrentMonth(label){
+  const d = new Date(String(label).replace('_', ' 1, '));
+  const n = new Date();
+  return !isNaN(d) && d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth();
+}
+function currentFyQuarter(){
+  const n = new Date();
+  const y = n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1;
+  return y + '-' + String(y + 1).slice(-2) + ' Q' + (Math.floor(((n.getMonth() + 9) % 12) / 3) + 1);
+}
+
+// fillMonths: inserts zero rows for months that have no entries, so the
+// trend charts have no gaps. Rows with an unknown month are kept at the end.
+function fillMonths(agg){
+  const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
+  const known = agg.filter(a => idx.has(a.key));
+  const unknown = agg.filter(a => !idx.has(a.key));
+  if (!known.length) return agg;
+  const pos = known.map(a => idx.get(a.key));
+  const have = new Map(known.map(a => [a.key, a]));
+  const out = [];
+  for (let i = Math.min(...pos); i <= Math.max(...pos); i++){
+    const k = MONTH_ORDER[i];
+    out.push(have.get(k) || {key:k, Expense:0, Budget:0, Entries:0, AvgPerEntry:0});
+  }
+  return out.concat(unknown);
+}
+
 // ---------------- Generic filter system (shared across all tabs) ----------------
 const FILTER_DEFS = [
   {key:'fy', label:'Financial Year', field:'fy'},
@@ -634,6 +694,7 @@ function renderTab(tabId){
   else if (tabId === 'tab-sheets') renderSheetsTab();
   else if (tabId === 'tab-quartercomp') renderQuarterTab();
   else if (tabId === 'tab-revenue') renderRevenueTab();
+  else if (tabId === 'tab-budget') renderBudgetTab();
   else if (tabId === 'tab-comparison') populateCmpGroups();
   else if (tabId === 'tab-entries') renderEntriesTab();
 }
@@ -810,9 +871,10 @@ function renderTrend(){
   destroy('trend');
   const ctx = document.getElementById('trendChart');
   const rows = getFilteredRows();
-  const agg = aggregateBy(rows, 'month');
+  let agg = aggregateBy(rows, 'month');
   const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
   agg.sort((a,b)=> (idx.has(a.key)?idx.get(a.key):999) - (idx.has(b.key)?idx.get(b.key):999));
+  agg = fillMonths(agg);
   const labels = agg.map(m=>m.key);
   charts.trend = new Chart(ctx, {
     data:{
@@ -983,8 +1045,7 @@ function renderMonthlyChart(agg){
     data:{
       labels,
       datasets:[
-        {label:'Expense (₹ L)', data: agg.map(m=>+(m.Expense/1e5).toFixed(2)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5},
-        {label:'Budget (₹ L)', data: agg.map(m=>+(m.Budget/1e5).toFixed(2)), backgroundColor:'rgba(79,139,208,0.55)', borderRadius:5}
+        {label:'Expense (₹ L)', data: agg.map(m=>+(m.Expense/1e5).toFixed(2)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5}
       ]
     },
     options:{
@@ -1006,9 +1067,11 @@ function renderMonthlyTable(agg){
   agg.forEach((m,i)=>{
     const tr = document.createElement('tr');
     const prev = i>0 ? agg[i-1] : null;
-    const expDelta = (prev && prev.Expense) ? ((m.Expense-prev.Expense)/Math.abs(prev.Expense)*100) : null;
+    const partial = isCurrentMonth(m.key);
+    const expDelta = (prev && prev.Expense && !partial) ? ((m.Expense-prev.Expense)/Math.abs(prev.Expense)*100) : null;
     const expDeltaHtml = expDelta===null ? '-' : `<span class="${expDelta>=0?'up':'down'}">${expDelta>=0?'+':''}${Math.round(expDelta)}%</span>`;
-    tr.innerHTML = `<td>${m.key}</td><td class="num">${fmtCr(m.Expense)}</td><td class="num">${fmtCr(m.Budget)}</td><td class="num">${fmtNum(m.Entries)}</td><td class="num">${expDeltaHtml}</td>`;
+    const monthCell = m.key + (partial ? ' <span class="pill mid">partial</span>' : '');
+    tr.innerHTML = `<td>${monthCell}</td><td class="num">${fmtCr(m.Expense)}</td><td class="num">${fmtCr(m.Budget)}</td><td class="num">${fmtNum(m.Entries)}</td><td class="num">${expDeltaHtml}</td>`;
     tbody.appendChild(tr);
   });
   document.getElementById('monthlyTableTag').textContent = agg.length + ' months';
@@ -1016,9 +1079,10 @@ function renderMonthlyTable(agg){
 
 function renderMonthlyTab(){
   const rows = getFilteredRows();
-  const agg = aggregateBy(rows, 'month');
+  let agg = aggregateBy(rows, 'month');
   const idx = new Map(MONTH_ORDER.map((m,i)=>[m,i]));
   agg.sort((a,b)=> (idx.has(a.key)?idx.get(a.key):999) - (idx.has(b.key)?idx.get(b.key):999));
+  agg = fillMonths(agg);
   renderMonthlyKPIs(agg);
   renderMonthlyChart(agg);
   renderMonthlyTable(agg);
@@ -1250,14 +1314,16 @@ function renderQuarterKPIs(agg){
   row.innerHTML = '';
   const totalExpense = agg.reduce((a,b)=>a+b.Expense,0);
   const totalBudget = agg.reduce((a,b)=>a+b.Budget,0);
-  const last = agg.length ? agg[agg.length-1] : null;
-  const prevLast = agg.length>1 ? agg[agg.length-2] : null;
+  // the running quarter is incomplete, so QoQ is computed on completed quarters only
+  const done = agg.filter(q => q.key !== currentFyQuarter());
+  const last = done.length ? done[done.length-1] : null;
+  const prevLast = done.length>1 ? done[done.length-2] : null;
   const qoqExp = (last && prevLast && prevLast.Expense) ? ((last.Expense-prevLast.Expense)/Math.abs(prevLast.Expense)*100) : null;
   const items = [
     {label:'Total Expense', value: fmtCr(totalExpense)},
     {label:'Total Budget', value: fmtCr(totalBudget)},
     {label:'Quarters in View', value: fmtNum(agg.length)},
-    {label:'Latest QoQ Expense Change', value: qoqExp===null?'-':(qoqExp>=0?'+':'')+Math.round(qoqExp)+'%', cls: qoqExp===null?'':(qoqExp>=0?'down':'up')},
+    {label:'Latest QoQ Expense Change' + (last ? ' (' + last.key + ')' : ''), value: qoqExp===null?'-':(qoqExp>=0?'+':'')+Math.round(qoqExp)+'%', cls: qoqExp===null?'':(qoqExp>=0?'down':'up')},
   ];
   items.forEach(it=>{
     const div = document.createElement('div'); div.className='kpi';
@@ -1275,8 +1341,7 @@ function renderQuarterChart(agg){
     data:{
       labels,
       datasets:[
-        {label:'Expense (₹ L)', data: agg.map(q=>+(q.Expense/1e5).toFixed(2)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5},
-        {label:'Budget (₹ L)', data: agg.map(q=>+(q.Budget/1e5).toFixed(2)), backgroundColor:'rgba(79,139,208,0.55)', borderRadius:5}
+        {label:'Expense (₹ L)', data: agg.map(q=>+(q.Expense/1e5).toFixed(2)), backgroundColor:'rgba(224,102,95,0.6)', borderRadius:5}
       ]
     },
     options:{
@@ -1298,9 +1363,11 @@ function renderQuarterTable(agg){
   agg.forEach((q,i)=>{
     const tr = document.createElement('tr');
     const prev = i>0 ? agg[i-1] : null;
-    const expDelta = (prev && prev.Expense) ? ((q.Expense-prev.Expense)/Math.abs(prev.Expense)*100) : null;
+    const partial = q.key === currentFyQuarter();
+    const expDelta = (prev && prev.Expense && !partial) ? ((q.Expense-prev.Expense)/Math.abs(prev.Expense)*100) : null;
     const expDeltaHtml = expDelta===null ? '-' : `<span class="${expDelta>=0?'up':'down'}">${expDelta>=0?'+':''}${Math.round(expDelta)}%</span>`;
-    tr.innerHTML = `<td>${q.key}</td><td class="num">${fmtCr(q.Expense)}</td><td class="num">${fmtCr(q.Budget)}</td><td class="num">${fmtNum(q.Entries)}</td><td class="num">${expDeltaHtml}</td>`;
+    const qCell = q.key + (partial ? ' <span class="pill mid">partial</span>' : '');
+    tr.innerHTML = `<td>${qCell}</td><td class="num">${fmtCr(q.Expense)}</td><td class="num">${fmtCr(q.Budget)}</td><td class="num">${fmtNum(q.Entries)}</td><td class="num">${expDeltaHtml}</td>`;
     tbody.appendChild(tr);
   });
   document.getElementById('quarterTableTag').textContent = agg.length + ' quarters';
@@ -1325,7 +1392,7 @@ function projectAgg(rows){
   const m = new Map();
   rows.forEach(r=>{
     const k = r.projectCode;
-    if (!m.has(k)) m.set(k, {key:k, client:r.client || '(blank)', expense:0, revenue:0});
+    if (!m.has(k)) m.set(k, {key:k, client:r.client || '(blank)', type:r.projectType || '(blank)', expense:0, revenue:0});
     const p = m.get(k);
     p.expense += (r.subtotal || 0);
     p.revenue = (REVENUE_MODE === 'sum') ? p.revenue + (r.revenue || 0) : Math.max(p.revenue, r.revenue || 0);
@@ -1413,6 +1480,35 @@ function renderRevenueTab(){
     }
   });
 
+  // Service-line wise (LIVECCTV, BIOMETRIC, FRISKING, CCTV-AI, VO-IP ...): expense vs revenue
+  destroy('revType');
+  const tg = new Map();
+  mapped.forEach(p=>{
+    const t = tg.get(p.type) || {key:p.type, expense:0, revenue:0};
+    t.expense += p.expense; t.revenue += p.revenue;
+    tg.set(p.type, t);
+  });
+  const tl = [...tg.values()].sort((a,b)=>b.revenue-a.revenue).slice(0,12);
+  charts.revType = new Chart(document.getElementById('revTypeChart'), {
+    type:'bar',
+    data:{
+      labels: tl.map(t=>t.key + ' (' + (t.revenue ? (t.expense/t.revenue*100).toFixed(0) : '-') + '%)'),
+      datasets:[
+        {label:'Revenue (₹ Cr)', data: tl.map(t=>+(t.revenue/1e7).toFixed(2)), backgroundColor:'rgba(51,184,168,0.65)', borderRadius:4},
+        {label:'Expense (₹ Cr)', data: tl.map(t=>+(t.expense/1e7).toFixed(2)), backgroundColor:'rgba(224,102,95,0.7)', borderRadius:4}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      layout:{padding:{top:18}},
+      plugins:{
+        legend:{position:'bottom'},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:9, weight:'600'}, anchor:'end', align:'top', formatter:(v)=> v }
+      },
+      scales:{y:{title:{display:true, text:'₹ Crore'}}}
+    }
+  });
+
   // Client table
   const g = new Map();
   scoped.forEach(p=>{
@@ -1447,6 +1543,75 @@ function renderRevenueTab(){
   if (types.length) li.push(`<b>Biggest expense type:</b> ${types[0].key} (${fmtCr(types[0].Expense)}).`);
   if (months.length) li.push(`<b>Peak expense month:</b> ${months[0].key} (${fmtCr(months[0].Expense)}).`);
   document.getElementById('revReport').innerHTML = '<ul style="margin:0; padding-left:18px;">' + li.map(x=>'<li>'+x+'</li>').join('') + '</ul>';
+}
+
+// ---------------- Budget vs Actual tab ----------------
+// Budget is filled only on some source sheets (e.g. CCR) and only on the lines
+// that were budgeted. So the comparison is limited to rows that carry a budget,
+// and the unbudgeted spend of the same sheet(s) is shown separately in the tag.
+function renderBudgetTab(){
+  const rows = getFilteredRows();
+  const tracked = new Set(ROWS.filter(r => r.budget > 0).map(r => r.sheetName));
+  const scope = rows.filter(r => tracked.has(r.sheetName));
+  const budgeted = scope.filter(r => r.budget > 0);
+  const unbudgeted = sumOf(scope.filter(r => !(r.budget > 0)), r => r.subtotal || 0);
+
+  const g = new Map();
+  budgeted.forEach(r=>{
+    const p = g.get(r.projectCode) || {key:r.projectCode, budget:0, expense:0};
+    p.budget += r.budget;
+    p.expense += (r.subtotal || 0);
+    g.set(r.projectCode, p);
+  });
+  const ps = [...g.values()].sort((a,b)=>b.budget-a.budget);
+  const B = sumOf(ps, p=>p.budget), E = sumOf(ps, p=>p.expense);
+  const over = ps.filter(p => p.expense > p.budget);
+
+  const kpi = document.getElementById('budKpiRow');
+  kpi.innerHTML = '';
+  [
+    {label:'Budgeted Projects', value: fmtNum(ps.length)},
+    {label:'Total Budget', value: fmtCr(B)},
+    {label:'Expense on Budgeted Lines', value: fmtCr(E)},
+    {label:'Budget Used', value: B ? (E/B*100).toFixed(1)+'%' : '-'},
+    {label:'Over-budget Projects', value: fmtNum(over.length)},
+  ].forEach(it=>{
+    const d = document.createElement('div'); d.className = 'kpi';
+    d.innerHTML = `<div class="label">${it.label}</div><div class="value">${it.value}</div>`;
+    kpi.appendChild(d);
+  });
+  document.getElementById('budTag').textContent = 'unbudgeted spend in the same sheet(s): ' + fmtCr(unbudgeted);
+
+  destroy('bud');
+  const top = ps.slice(0, 12);
+  charts.bud = new Chart(document.getElementById('budChart'), {
+    type:'bar',
+    data:{
+      labels: top.map(p=>p.key.length>34 ? p.key.slice(0,32)+'…' : p.key),
+      datasets:[
+        {label:'Budget (₹ L)', data: top.map(p=>+(p.budget/1e5).toFixed(1)), backgroundColor:'rgba(79,139,208,0.65)', borderRadius:4},
+        {label:'Actual Expense (₹ L)', data: top.map(p=>+(p.expense/1e5).toFixed(1)), backgroundColor:'rgba(224,102,95,0.7)', borderRadius:4}
+      ]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'bottom'},
+        datalabels:{ display:true, clip:true, color: currentDatalabelColor, font:{size:9, weight:'600'}, anchor:'end', align:'right', formatter:(v)=> fmtNum(v) }
+      },
+      scales:{x:{title:{display:true, text:'₹ Lakh'}}}
+    }
+  });
+
+  const tbody = document.querySelector('#budTable tbody');
+  tbody.innerHTML = '';
+  [...ps].sort((a,b)=>(b.expense/b.budget)-(a.expense/a.budget)).forEach(p=>{
+    const used = p.budget ? p.expense/p.budget*100 : null;
+    const cls = used===null ? 'mid' : (used>100 ? 'bad' : (used>=80 ? 'mid' : 'good'));
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${p.key}</td><td class="num">${fmtCr(p.budget)}</td><td class="num">${fmtCr(p.expense)}</td><td class="num">${fmtCr(p.budget-p.expense)}</td><td class="num"><span class="pill ${cls}">${used===null ? '-' : used.toFixed(0)+'%'}</span></td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 // ---------------- Comparison tab ----------------
