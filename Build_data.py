@@ -58,14 +58,16 @@ def expense_group(v):
     rules = [
         ("Food & Catering", ["food", "catering", "lunch", "snack", "beverage"]),
         ("Internet & Broadband", ["internet", "broadband"]),
-        ("Manpower & Labour", ["manpower", "labour", "labor", "waiter", "serving", "helping"]),
+        ("Manpower & Labour", ["manpower", "labour", "labor", "waiter", "serving", "helping", "handling"]),
         ("Purchase - Stock", ["stock", "inventory"]),
-        ("Purchase - Consumables", ["consumable"]),
+        ("Purchase - Consumables", ["consumable", "bubble"]),
         ("Purchase - Project (Local/Central)", ["purchase"]),
         ("Service (Fixed/Variable/Technical)", ["service"]),
         ("Fit-out, Furniture & Panels", ["panel", "table", "carpet", "plant", "pvc", "partition",
                                           "wooden", "ply", "acrylic", "decorative"]),
         ("Equipment (TV/UPS/Fridge)", ["tv", "ups", "refrig"]),
+        ("Transport", ["transport"]),
+        ("Stationery & Misc", ["stationar", "stationer", "misc"]),
     ]
     for name, keys in rules:
         if any(k in t for k in keys):
@@ -121,13 +123,37 @@ def clean_data(raw):
                           .str.rstrip(".")
                           .str.replace("/VOIP/", "/VO-IP/", regex=False))
 
+    # same project written with / without hyphens (UPPRPB-CONST vs UPPRPBCONST) -> one code.
+    # The spelling that carries revenue (or, failing that, the most common one) is kept.
+    hkey = df["Project Code"].str.replace("-", "", regex=False)
+    _mode = lambda s: s.value_counts().idxmax()
+    has_rev = df["Revenue"] > 0
+    before = df["Project Code"].nunique()
+    if has_rev.any():
+        canon = df[has_rev].groupby(hkey[has_rev])["Project Code"].agg(_mode)
+    else:
+        canon = pd.Series(dtype=object)
+    fallback = df.groupby(hkey)["Project Code"].agg(_mode)
+    df["Project Code"] = hkey.map(canon).fillna(hkey.map(fallback))
+    issues["Project-code spelling variants merged"] = int(before - df["Project Code"].nunique())
+
     df["Expense Type Original"] = df["Expense Type"]
     df["Expense Type"] = df["Expense Type"].apply(expense_group)
 
-    parts = df["Project Code"].str.split("/", expand=True).reindex(columns=range(5))
+    parts = df["Project Code"].str.split("/", expand=True).reindex(columns=range(6))
+    # codes like MPPSC/ATP/2026/200926/CCTV-AI/IIL have an extra '/', merge the 2nd and 3rd part
+    is_date6 = lambda s: s.fillna("").astype(str).str.fullmatch(r"\d{6}")
+    shift = ~is_date6(parts[2]) & is_date6(parts[3])
+    if shift.any():
+        parts.loc[shift, 1] = parts.loc[shift, 1].fillna("") + "-" + parts.loc[shift, 2].fillna("")
+        parts.loc[shift, 2] = parts.loc[shift, 3]
+        parts.loc[shift, 3] = parts.loc[shift, 4]
+        parts.loc[shift, 4] = parts.loc[shift, 5]
+    issues["Project codes with extra '/' fixed"] = int(shift.sum())
+
     df["Client"] = parts[0]
-    df["Location"] = parts[1]
-    df["Category"] = parts[3]
+    df["Location"] = parts[1]      # actually the exam / project name (shown as "Project Name")
+    df["Category"] = parts[3]      # service line: LIVECCTV, BIOMETRIC, FRISKING, CCTV-AI ...
     df["Entity"] = parts[4]
     for c in ["Client", "Location", "Category", "Entity"]:
         df[c] = df[c].fillna("").astype(str).str.strip().replace("", "Unknown")
@@ -211,7 +237,7 @@ def build_payload(df, issues):
                 "Sheet Name": r["Sheet Name"],
                 "Project Code": r["Project Code"],
                 "Client": r["Client"],
-                "Location": r["Location"],
+                "Project Name": r["Location"],
                 "Category": r["Category"],
                 "Entity": r["Entity"],
                 "Expense Type": r["Expense Type"],
@@ -221,8 +247,15 @@ def build_payload(df, issues):
                 "Revenue": float(r["Revenue"]),
             },
         })
-    month_order = (df.loc[df["Month Key"] != "Unknown", ["Month", "Month Key"]]
-                     .drop_duplicates().sort_values("Month Key")["Month"].tolist())
+
+    # continuous month list (no gaps) from the first to the last month in the data,
+    # so months with no entries still show up in the trend charts
+    mk = df.loc[df["Month Key"] != "Unknown", "Month Key"]
+    if len(mk):
+        month_order = pd.date_range(mk.min(), mk.max(), freq="MS").strftime("%b_%Y").tolist()
+    else:
+        month_order = []
+
     return {
         "rows": rows,
         "monthOrder": month_order,
